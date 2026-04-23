@@ -36,7 +36,7 @@ Full list: see `src/lib.rs` or [docs.rs](https://docs.rs/jionlp-core).
 jionlp-core = "0.1"
 ```
 
-MSRV: Rust 1.75.
+MSRV: Rust 1.85 (required by `jieba-rs` 0.9 transitively — it uses edition2024).
 
 ## Quickstart
 

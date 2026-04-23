@@ -16,7 +16,7 @@ authors = ["jionlp-rs contributors"]
 description = "Rust port of JioNLP — Chinese NLP preprocessing & parsing toolkit"
 repository = "https://github.com/Psli/jionlp_rs"
 readme = "README.md"
-rust-version = "1.75"
+rust-version = "1.85"
 
 [workspace.dependencies]
 aho-corasick = "1.1"
