@@ -179,6 +179,18 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if let Some(t) = try_limit_month_day(trimmed, now) {
         return Some(t);
     }
+    // Python-parity: `10月12日` / `10月12日16时` / `10月12` (bare, no year).
+    // Inherits year from `now`. Must come before try_absolute_date since
+    // that requires a leading year.
+    if let Some(t) = try_bare_month_day(trimmed, now) {
+        return Some(t);
+    }
+    // Python-parity: `12日16时` / `12号15点` — day-with-clock, inherits
+    // year + month from `now`. Lets date ranges like `本月10日至12日16时`
+    // parse their right-hand side correctly.
+    if let Some(t) = try_bare_day_with_clock(trimmed, now) {
+        return Some(t);
+    }
     // Round 17 #16 — `下个月末` / `本月初`.
     if let Some(t) = try_limit_month_boundary(trimmed, now) {
         return Some(t);
@@ -915,52 +927,57 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         return None;
     }
 
-    let a = try_absolute_date_loose(left)?;
+    // LHS: try full-year, then bare `M月D日`, then `本月N日` / `下个月N号` etc.
+    let a = try_absolute_date_loose(left)
+        .or_else(|| try_bare_month_day(left, now))
+        .or_else(|| try_limit_month_day(left, now))?;
     // For `right`, first try as a full absolute date (loose); if that fails,
-    // try "day-only" inheriting left's (year, month) — accept Chinese
-    // numerals (十五号) as well as Arabic (15号).
-    let b_full = try_absolute_date_loose(right);
-    let b = match b_full {
-        Some(t) => t,
-        None => {
-            // Fallback 1: right is "Nth of month" (bare day, inherit year+month).
-            // Fallback 2: right is "N月" (bare month, inherit year from left).
-            if let Some((day, rest)) = parse_day_token(right) {
-                if rest.trim().is_empty() {
-                    let (start, end) =
-                        date_range(a.start.year(), Some(a.start.month()), Some(day))?;
-                    TimeInfo {
-                        time_type: "time_point",
-                        start,
-                        end,
-                        definition: "accurate",
-                        ..Default::default()
-                    }
-                } else if let Some(month_only) = parse_bare_month(right) {
-                    let (start, end) = date_range(a.start.year(), Some(month_only), None)?;
-                    TimeInfo {
-                        time_type: "time_point",
-                        start,
-                        end,
-                        definition: "accurate",
-                        ..Default::default()
-                    }
-                } else {
-                    return None;
-                }
-            } else if let Some(month_only) = parse_bare_month(right) {
-                let (start, end) = date_range(a.start.year(), Some(month_only), None)?;
-                TimeInfo {
-                    time_type: "time_point",
-                    start,
-                    end,
-                    definition: "accurate",
-                    ..Default::default()
-                }
-            } else {
-                return None;
+    // try "day-only" (with optional clock) inheriting left's (year, month);
+    // also accept a bare `M月N日` that inherits left's year; or a bare month.
+    let b = if let Some(t) = try_absolute_date_loose(right) {
+        t
+    } else if let Some((day, rest)) = parse_day_token(right) {
+        let rest = rest.trim();
+        let (s, e) = date_range(a.start.year(), Some(a.start.month()), Some(day))?;
+        if rest.is_empty() {
+            TimeInfo {
+                time_type: "time_point",
+                start: s,
+                end: e,
+                definition: "accurate",
+                ..Default::default()
             }
+        } else if let Some(t) = apply_optional_clock(s, e, rest) {
+            // `12日16时` — day+clock inherits year+month from LHS.
+            t
+        } else if let Some(month_only) = parse_bare_month(right) {
+            let (start, end) = date_range(a.start.year(), Some(month_only), None)?;
+            TimeInfo {
+                time_type: "time_point",
+                start,
+                end,
+                definition: "accurate",
+                ..Default::default()
+            }
+        } else {
+            return None;
         }
+    } else if let Some(month_only) = parse_bare_month(right) {
+        let (start, end) = date_range(a.start.year(), Some(month_only), None)?;
+        TimeInfo {
+            time_type: "time_point",
+            start,
+            end,
+            definition: "accurate",
+            ..Default::default()
+        }
+    } else if let Some(t) = try_bare_month_day(right, now) {
+        // Right side has its own `M月D日` (possibly + clock), e.g.
+        // `本月10日至12日16时` case is covered above via day_token branch,
+        // but `本月10日至5月1日` needs this branch.
+        t
+    } else {
+        return None;
     };
     // Guard: right must come after or equal left.
     if b.end < a.start {
@@ -970,10 +987,20 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     // used later for implicit-year ranges like "3月5日到8日" (no year).
     let _ = now;
 
+    // Span end: when the right side carried an explicit hour (e.g. "16时"),
+    // Python returns the hour point (16:00:00) rather than the inclusive
+    // end-of-hour (16:59:59). If the rhs is a time_point whose start has
+    // a non-midnight clock, use `b.start` instead of `b.end`.
+    let end = if b.time_type == "time_point" && b.start.time() != chrono::NaiveTime::MIN {
+        b.start
+    } else {
+        b.end
+    };
+
     Some(TimeInfo {
         time_type: "time_span",
         start: a.start,
-        end: b.end,
+        end,
         definition: "accurate",
         ..Default::default()
     })
@@ -2022,6 +2049,83 @@ fn try_limit_month_day(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         definition: "accurate",
         ..Default::default()
     })
+}
+
+/// Python parity — `M月D日` / `M月D日<clock>` / `M月D` (no year).
+/// Inherits year from `now`. Matches Python `year_month_day_pattern`'s
+/// middle branch (`bracket(MONTH_STRING), bracket_absence(DAY_STRING)`).
+fn try_bare_month_day(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    // Text must begin with month token; reject if any preceding junk.
+    // Accept 1-2 digit or Chinese numeral month, followed by `月`.
+    let (month, rest) = parse_month_token(text)?;
+    let (day, tail) = parse_day_token(rest)?;
+
+    let year = now.year();
+    let (start, end) = date_range(year, Some(month), Some(day))?;
+    apply_optional_clock(start, end, tail.trim())
+}
+
+/// Python parity — `D日H时` / `D号H点` (no year, no month) — used for
+/// the right-hand side of spans like `本月10日至12日16时`. Inherits both
+/// year and month from `now`.
+fn try_bare_day_with_clock(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    let (day, rest) = parse_day_token(text)?;
+    // Must be strictly day+clock — no empty tail, no month/year markers.
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    if rest.contains('月') || rest.contains('年') {
+        return None;
+    }
+    let (year, month) = (now.year(), now.month());
+    let (start, end) = date_range(year, Some(month), Some(day))?;
+    apply_optional_clock(start, end, rest)
+}
+
+/// Parse a leading month token (1..=12) as either Arabic digits (1 or 2)
+/// followed by `月`, or Chinese numeral month followed by `月`. Returns
+/// `(month, rest_after_月)`.
+fn parse_month_token(s: &str) -> Option<(u32, &str)> {
+    let s = s.trim_start();
+    // Try Arabic digits (up to 2, bounded by `月`).
+    let bytes = s.as_bytes();
+    let mut end = 0usize;
+    while end < bytes.len() && bytes[end].is_ascii_digit() && end < 2 {
+        end += 1;
+    }
+    if end > 0 {
+        let m: u32 = s[..end].parse().ok()?;
+        if !(1..=12).contains(&m) {
+            return None;
+        }
+        let rest = &s[end..];
+        if let Some(rest) = rest.strip_prefix('月') {
+            return Some((m, rest));
+        }
+    }
+    // Chinese numeral month: 一..九, 十, 十一, 十二.
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    for take in [2usize, 1] {
+        if chars.len() < take {
+            continue;
+        }
+        let end_byte = if chars.len() == take {
+            s.len()
+        } else {
+            chars[take].0
+        };
+        let chunk = &s[..end_byte];
+        if let Some(n) = cn_int(chunk) {
+            if (1..=12).contains(&n) {
+                let rest = &s[end_byte..];
+                if let Some(rest) = rest.strip_prefix('月') {
+                    return Some((n, rest));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Pattern #16 — `本/上/下月末` / `本月初/中`.
