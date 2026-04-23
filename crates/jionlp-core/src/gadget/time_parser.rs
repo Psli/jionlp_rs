@@ -249,6 +249,11 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if let Some(t) = try_year_ordinal_month(trimmed, now) {
         return Some(t);
     }
+    // Python parity — `<year>?<M月>上旬/中旬/下旬` (1-10, 11-20, 21-EOM)
+    // and `<year>?<M月>底` (last 5 days).
+    if let Some(t) = try_month_xun(trimmed, now) {
+        return Some(t);
+    }
     // Python parity — `同月D号/日[clock]` / `同年M月D号` — inherits
     // year/month from `now`.
     if let Some(t) = try_same_month_or_year(trimmed, now) {
@@ -1442,11 +1447,19 @@ fn try_named_period(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         ("这", 0),
         ("今", 0),
         ("当", 0),
+        ("上上一个", -2),
+        ("上上个", -2),
+        ("上上一", -2),
+        ("上上", -2),
         ("上一个", -1),
         ("上个", -1),
         ("上一", -1),
         ("上", -1),
         ("去", -1),
+        ("下下一个", 2),
+        ("下下个", 2),
+        ("下下一", 2),
+        ("下下", 2),
         ("下一个", 1),
         ("下个", 1),
         ("下一", 1),
@@ -1483,20 +1496,21 @@ fn try_named_period(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     // (week/month/quarter/year). The tail after the period unit must also
     // be empty or trivial — we don't want to swallow "本月3日" as
     // "this-month" when the user meant "the 3rd of this month".
-    let (period, is_point): (NamedPeriod, bool) = if rest == "周" || rest == "星期" {
-        // Python returns time_point for all named weeks.
-        (NamedPeriod::Week, true)
-    } else if rest == "月" {
-        // Python returns time_point for `当月` and `上一个月` / `下一个月`;
-        // time_span for generic `本月` / `这个月`.
-        (NamedPeriod::Month, matched_prefix_emphasizes_point)
-    } else if rest == "年" {
-        (NamedPeriod::Year, false)
-    } else if rest == "季度" {
-        (NamedPeriod::Quarter, false)
-    } else {
-        return None;
-    };
+    let (period, is_point): (NamedPeriod, bool) =
+        if rest == "周" || rest == "星期" || rest == "礼拜" {
+            // Python returns time_point for all named weeks.
+            (NamedPeriod::Week, true)
+        } else if rest == "月" {
+            // Python returns time_point for `当月` and `上一个月` / `下一个月`;
+            // time_span for generic `本月` / `这个月`.
+            (NamedPeriod::Month, matched_prefix_emphasizes_point)
+        } else if rest == "年" {
+            (NamedPeriod::Year, false)
+        } else if rest == "季度" {
+            (NamedPeriod::Quarter, false)
+        } else {
+            return None;
+        };
 
     let (start, end) = period_range(period, now.date(), offset)?;
     Some(TimeInfo {
@@ -1944,6 +1958,17 @@ fn cn_int(s: &str) -> Option<u32> {
             Some(10 + u)
         }
         ['十'] => Some(10),
+        // `廿`/`念` (both = 20), `卅`/`丗` (30), optionally + ones digit.
+        ['廿' | '念', b] => {
+            let u = digit(*b)?;
+            Some(20 + u)
+        }
+        ['廿' | '念'] => Some(20),
+        ['卅' | '丗', b] => {
+            let u = digit(*b)?;
+            Some(30 + u)
+        }
+        ['卅' | '丗'] => Some(30),
         [a] => digit(*a),
         _ => None,
     }
@@ -2413,6 +2438,53 @@ fn try_same_month_or_year(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         return apply_optional_clock(start, end, tail.trim());
     }
     None
+}
+
+/// `<year>?<M月>上旬/中旬/下旬/月底`. Ten-day third-of-month granularity.
+///   上旬: days 1-10, 中旬: 11-20, 下旬: 21-EOM.
+///   月底: last 5 days (matches Python month_boundary 末 semantics).
+fn try_month_xun(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    let (year, rest) = resolve_optional_year_prefix(text, now)?;
+    let rest = rest.trim_start_matches('的');
+    let (month, rest) = parse_month_token(rest)?;
+    let rest = rest
+        .trim_start_matches('份')
+        .trim_start_matches('的')
+        .trim();
+    let (from_day, to_day_kind) = match rest {
+        "上旬" => (1u32, Xun::UpperFixed(10)),
+        "中旬" => (11u32, Xun::UpperFixed(20)),
+        "下旬" => (21u32, Xun::ToEom),
+        "月底" | "底" => (0u32, Xun::Last5),
+        _ => return None,
+    };
+    // Compute last day of that month.
+    let first_of_next = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1)?
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1)?
+    };
+    let total = first_of_next.pred_opt()?.day();
+    let (from_day, to_day) = match (from_day, to_day_kind) {
+        (_, Xun::UpperFixed(d)) => (from_day, d.min(total)),
+        (_, Xun::ToEom) => (from_day, total),
+        (_, Xun::Last5) => (total.saturating_sub(4).max(25), total),
+    };
+    let from = NaiveDate::from_ymd_opt(year, month, from_day)?;
+    let to = NaiveDate::from_ymd_opt(year, month, to_day)?;
+    Some(TimeInfo {
+        time_type: "time_span",
+        start: from.and_hms_opt(0, 0, 0)?,
+        end: to.and_hms_opt(23, 59, 59)?,
+        definition: "blur",
+        ..Default::default()
+    })
+}
+
+enum Xun {
+    UpperFixed(u32),
+    ToEom,
+    Last5,
 }
 
 /// `<year>首月/末月/第N个月/前N个月/后N个月`. Covers:
