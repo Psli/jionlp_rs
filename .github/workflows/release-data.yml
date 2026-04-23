@@ -1,0 +1,55 @@
+name: Release dictionary bundle
+
+# Triggered by tags matching `jionlp-data-v*` (e.g. `jionlp-data-v2026.04.1`).
+# Packages `crates/jionlp-core/data/` into a single tarball and uploads it
+# to the corresponding GitHub Release. Consumers (jionlp_ex, future Rust
+# `fetch` feature) pull this artifact to refresh dictionaries without
+# bumping the library version.
+#
+# Versioning convention: date-based (YYYY.MM.N) to make it obvious these
+# tags are data snapshots, independent of `jionlp-core-v*` / `jionlp_ex-v*`
+# code tags.
+
+on:
+  push:
+    tags:
+      - 'jionlp-data-v*'
+
+permissions:
+  contents: write   # upload release assets
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: |
+          VER="${GITHUB_REF_NAME#jionlp-data-v}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Package data/
+        id: pkg
+        run: |
+          VER="${{ steps.version.outputs.version }}"
+          ARCHIVE="jionlp-data-v${VER}.tar.gz"
+          # Tar from inside crates/jionlp-core so the archive contains
+          # `data/...` entries (not the full crate path prefix).
+          tar -C crates/jionlp-core -czf "${ARCHIVE}" data
+          sha256sum "${ARCHIVE}" | awk '{print $1}' > "${ARCHIVE}.sha256"
+          ls -lh "${ARCHIVE}"*
+          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            ${{ steps.pkg.outputs.archive }}
+            ${{ steps.pkg.outputs.archive }}.sha256
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

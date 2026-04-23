@@ -1,0 +1,31 @@
+# Rust
+/target/
+**/target/
+*.pdb
+*.rlib
+
+# Packaging artifacts
+/jionlp-*.tar.gz
+/jionlp-*.tar.gz.sha256
+/jionlp-data-v*/
+
+# IDE / editor
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Bench output
+/bench/target/
+/bench/flamegraph.svg
+/criterion/
+
+# Rust-analyzer
+rust-project.json
+
+# Release tarballs
+*.tar.gz

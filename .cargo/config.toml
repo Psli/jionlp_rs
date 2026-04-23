@@ -1,0 +1,14 @@
+# Standalone NIF linker config. When built under Mix/Rustler, rustler_mix
+# injects equivalent flags; this file exists so `cargo check` / `cargo build`
+# from the raw workspace root also succeed.
+
+[target.'cfg(target_os = "macos")']
+rustflags = [
+    "-C", "link-arg=-undefined",
+    "-C", "link-arg=dynamic_lookup",
+]
+
+[target.'cfg(target_os = "linux")']
+rustflags = [
+    "-C", "link-arg=-Wl,--allow-shlib-undefined",
+]

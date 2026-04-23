@@ -1,0 +1,38 @@
+[package]
+name = "jionlp-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Rust port of JioNLP — Chinese NLP preprocessing & parsing toolkit (core library)"
+keywords = ["nlp", "chinese", "tokenization", "jionlp"]
+categories = ["text-processing", "parser-implementations", "localization"]
+rust-version.workspace = true
+
+# Ship the runtime dictionary files so `init_default()` works out of the
+# box. The bundled set is ~9 MB (mostly compressed zip archives) in
+# `data/`, following the common Rust convention (cf. `tantivy`,
+# `whatlang`, `icu`).
+include = [
+    "src/**/*.rs",
+    "data/**/*.txt",
+    "data/**/*.zip",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE*",
+]
+
+[dependencies]
+aho-corasick = { workspace = true }
+regex        = { workspace = true }
+fancy-regex  = { workspace = true }
+once_cell    = { workspace = true }
+rustc-hash   = { workspace = true }
+thiserror    = { workspace = true }
+zip          = { workspace = true }
+chrono       = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

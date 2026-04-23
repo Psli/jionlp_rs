@@ -1,0 +1,22 @@
+[package]
+# Underscored name keeps the dylib and package name identical, avoiding a
+# hyphen/underscore mismatch in rustler_mix's crate lookup and dlopen path.
+name = "jionlp_nif"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Rustler NIF bindings for jionlp-rs (consumed by the jionlp_ex Elixir package)"
+publish = false
+rust-version.workspace = true
+
+[lib]
+name = "jionlp_nif"
+crate-type = ["cdylib"]
+
+[dependencies]
+jionlp-core = { path = "../jionlp-core" }
+rustler     = "0.34"
+chrono      = { workspace = true }
+rustc-hash  = { workspace = true }

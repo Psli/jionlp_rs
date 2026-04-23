@@ -1,0 +1,73 @@
+name: Release precompiled NIF
+
+# Triggered when you push a tag starting with `jionlp_ex-v` (e.g.
+# `jionlp_ex-v0.1.0`). Builds the Rust NIF for 7 targets × 2 NIF versions
+# = 14 tarballs and uploads them to the corresponding GitHub Release.
+#
+# `rustler_precompiled` on the consumer side fetches by URL:
+#   https://github.com/Psli/jionlp_rs/releases/download/jionlp_ex-v{VER}
+#     /libjionlp_nif-v{VER}-nif-{NIF_VER}-{TARGET}.so.tar.gz
+#
+# The `philss/rustler-precompiled-action` handles cross-compilation,
+# tarball naming and upload.
+
+on:
+  push:
+    tags:
+      - 'jionlp_ex-v*'
+
+permissions:
+  contents: write   # upload release assets
+
+jobs:
+  build:
+    name: ${{ matrix.job.target }} (nif-${{ matrix.nif-version }})
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        nif-version: ["2.15", "2.16"]
+        job:
+          # Linux — native + cross-compiled
+          - { target: aarch64-unknown-linux-gnu,  os: ubuntu-22.04, use-cross: true }
+          - { target: x86_64-unknown-linux-gnu,   os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-22.04, use-cross: true }
+          - { target: x86_64-unknown-linux-musl,  os: ubuntu-22.04, use-cross: true }
+          # macOS — native for Apple silicon, native for Intel
+          - { target: aarch64-apple-darwin,       os: macos-14 }
+          - { target: x86_64-apple-darwin,        os: macos-13 }
+          # Windows
+          - { target: x86_64-pc-windows-msvc,     os: windows-2022 }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#jionlp_ex-v}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Build NIF
+        id: build-crate
+        uses: philss/rustler-precompiled-action@v1.1.4
+        with:
+          # Matches `crate: :jionlp_nif` + `version:` in lib/jionlp/native.ex
+          project-name: jionlp_nif
+          project-version: ${{ steps.version.outputs.version }}
+          target: ${{ matrix.job.target }}
+          nif-version: ${{ matrix.nif-version }}
+          use-cross: ${{ matrix.job.use-cross || false }}
+          # Path is relative to repo root (= this Cargo workspace root).
+          project-dir: crates/jionlp_nif
+
+      - name: Upload artifact to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            ${{ steps.build-crate.outputs.file-path }}
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

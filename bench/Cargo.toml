@@ -1,0 +1,26 @@
+[workspace]
+# Empty [workspace] table: this package is its own workspace root so it does
+# not inherit the main jionlp_rs workspace. See top-level Cargo.toml for why
+# we keep criterion out of the main workspace's dependency graph.
+
+[package]
+name = "jionlp-bench"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["jionlp-rs contributors"]
+description = "Criterion benchmarks for jionlp-rs"
+publish = false
+rust-version = "1.75"
+
+[dependencies]
+jionlp-core = { path = "../crates/jionlp-core" }
+rustc-hash  = "2.0"
+
+# Pin criterion before the clap 4.6 bump that requires edition2024.
+[dev-dependencies]
+criterion = { version = "=0.4.0", default-features = false }
+
+[[bench]]
+name = "gadget"
+harness = false
