@@ -164,7 +164,7 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         return Some(t);
     }
     // Round 17 #20 — `20世纪` / `20世纪二十年代` — must precede named-period.
-    if let Some(t) = try_century(trimmed) {
+    if let Some(t) = try_century(trimmed, now) {
         return Some(t);
     }
     // Round 17 #8 — `前两天` / `未来三天` super-blur YMD.
@@ -226,6 +226,15 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     // Python parity — `<M月>第N周` / `<Y年M月>第N周` / relative-month /
     // relative-year versions. Covers 14+ parity-corpus cases.
     if let Some(t) = try_month_week_ordinal(trimmed, now) {
+        return Some(t);
+    }
+    // Python parity — `<year>?上半年/下半年` / `<year>?伊始`.
+    if let Some(t) = try_half_year(trimmed, now) {
+        return Some(t);
+    }
+    // Python parity — `同月D号/日[clock]` / `同年M月D号` — inherits
+    // year/month from `now`.
+    if let Some(t) = try_same_month_or_year(trimmed, now) {
         return Some(t);
     }
     // Python parity — `<相对年>M月[D日|号][<clock>]` / `<相对年>M月份`.
@@ -2099,6 +2108,58 @@ fn try_bare_quarter(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     })
 }
 
+/// `同月D号[clock]` / `同年M月D号`. Inherits year/month from `now`.
+fn try_same_month_or_year(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    if let Some(rest) = text.strip_prefix("同月") {
+        let (day, tail) = parse_day_token(rest)?;
+        let year = now.year();
+        let month = now.month();
+        let (start, end) = date_range(year, Some(month), Some(day))?;
+        return apply_optional_clock(start, end, tail.trim());
+    }
+    if let Some(rest) = text.strip_prefix("同年") {
+        let (month, rest) = parse_month_token(rest)?;
+        let year = now.year();
+        if rest.is_empty() {
+            let (start, end) = date_range(year, Some(month), None)?;
+            return Some(TimeInfo {
+                time_type: "time_span",
+                start,
+                end,
+                definition: "accurate",
+                ..Default::default()
+            });
+        }
+        let (day, tail) = parse_day_token(rest)?;
+        let (start, end) = date_range(year, Some(month), Some(day))?;
+        return apply_optional_clock(start, end, tail.trim());
+    }
+    None
+}
+
+/// `<year>?上半年/下半年` / `<year>?伊始` (== January).
+fn try_half_year(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    let (year, rest) = resolve_optional_year_prefix(text, now)?;
+    let rest = rest.trim_start_matches('的');
+    let (first_m, last_m) = match rest {
+        "上半年" => (1u32, 6),
+        "下半年" => (7u32, 12),
+        "伊始" => (1u32, 1), // Python: 伊始 == the start month.
+        _ => return None,
+    };
+    let first = NaiveDate::from_ymd_opt(year, first_m, 1)?;
+    let next_year = if last_m == 12 { year + 1 } else { year };
+    let next_month = if last_m == 12 { 1 } else { last_m + 1 };
+    let last = NaiveDate::from_ymd_opt(next_year, next_month, 1)?.pred_opt()?;
+    Some(TimeInfo {
+        time_type: "time_span",
+        start: first.and_hms_opt(0, 0, 0)?,
+        end: last.and_hms_opt(23, 59, 59)?,
+        definition: if rest == "伊始" { "blur" } else { "accurate" },
+        ..Default::default()
+    })
+}
+
 /// Relative-year + month (+ optional day + optional clock). Handles
 /// `今年六月`, `明年3月份`, `去年3月3号`, `前年9月2号左右`, etc.
 /// Day is optional (time_span whole month when omitted).
@@ -2607,26 +2668,76 @@ fn try_limit_month_boundary(text: &str, now: NaiveDateTime) -> Option<TimeInfo> 
     })
 }
 
-/// Pattern #20 — `N世纪` / `N世纪M十年代`.
-fn try_century(text: &str) -> Option<TimeInfo> {
-    static RE1: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"^(\d{1,2}|[一二两三四五六七八九十]+)\s*世纪$").unwrap());
-    static RE2: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(
-            r"^(\d{1,2}|[一二两三四五六七八九十]+)\s*世纪\s*([一二两三四五六七八九]+)十年代$",
-        )
-        .unwrap()
-    });
-    if let Some(caps) = RE2.captures(text) {
+/// Pattern #20 — century / decade / period. Python conventions:
+///   * `18世纪` → 1700–1799 (hundred-mark convention, not strict
+///     "1701-1800").
+///   * `上世纪` → previous century relative to `now`.
+///   * `N世纪M十年代[前期|中期|后期|末期|初|末]` → decade with sub-period.
+///   * `N世纪初/末` → first/last 20 years of the century.
+fn try_century(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    fn split_modifier(s: &str) -> (&str, Option<&'static str>) {
+        // Longest suffix first so `末期` beats `末`.
+        let mods: [(&str, &str); 7] = [
+            ("前期", "early"),
+            ("中期", "mid"),
+            ("后期", "late"),
+            ("末期", "late"),
+            ("初期", "early"),
+            ("初", "very_early"),
+            ("末", "very_late"),
+        ];
+        for (suf, tag) in mods {
+            if let Some(rest) = s.strip_suffix(suf) {
+                return (rest, Some(tag));
+            }
+        }
+        (s, None)
+    }
+
+    // Resolve optional relative-century prefix OR numeric century.
+    let now_century = (now.year() - 1) / 100 + 1;
+    let (century, after_prefix): (i32, &str) = if let Some(rest) = text.strip_prefix("上世纪") {
+        (now_century - 1, rest)
+    } else if let Some(rest) = text
+        .strip_prefix("本世纪")
+        .or_else(|| text.strip_prefix("这世纪"))
+    {
+        (now_century, rest)
+    } else if let Some(rest) = text.strip_prefix("下世纪") {
+        (now_century + 1, rest)
+    } else {
+        static RE_C: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"^(\d{1,2}|[一二两三四五六七八九十]+)\s*世纪").unwrap());
+        let caps = RE_C.captures(text)?;
         let c_str = caps.get(1)?.as_str();
-        let century: u32 = c_str.parse::<u32>().ok().or_else(|| cn_int(c_str))?;
-        let decade: u32 = cn_int(caps.get(2)?.as_str())?;
-        if !(1..=21).contains(&century) || decade > 9 {
+        let c: i32 = c_str
+            .parse::<i32>()
+            .ok()
+            .or_else(|| cn_int(c_str).map(|n| n as i32))?;
+        if !(1..=30).contains(&c) {
             return None;
         }
-        let base_year = (century as i32 - 1) * 100 + decade as i32 * 10;
-        let first = NaiveDate::from_ymd_opt(base_year, 1, 1)?;
-        let last = NaiveDate::from_ymd_opt(base_year + 9, 12, 31)?;
+        (c, &text[caps.get(0)?.end()..])
+    };
+
+    if !(1..=30).contains(&century) {
+        return None;
+    }
+    let c_start = (century - 1) * 100; // 18世纪 → 1700
+
+    let (body, modifier) = split_modifier(after_prefix);
+
+    if body.is_empty() {
+        let (y_first, y_last) = match modifier {
+            Some("very_early") => (c_start, c_start + 19),
+            Some("very_late") => (c_start + 80, c_start + 99),
+            Some("early") => (c_start, c_start + 29),
+            Some("mid") => (c_start + 30, c_start + 69),
+            Some("late") => (c_start + 70, c_start + 99),
+            _ => (c_start, c_start + 99),
+        };
+        let first = NaiveDate::from_ymd_opt(y_first, 1, 1)?;
+        let last = NaiveDate::from_ymd_opt(y_last, 12, 31)?;
         return Some(TimeInfo {
             time_type: "time_span",
             start: first.and_hms_opt(0, 0, 0)?,
@@ -2635,14 +2746,32 @@ fn try_century(text: &str) -> Option<TimeInfo> {
             ..Default::default()
         });
     }
-    let caps = RE1.captures(text)?;
-    let c_str = caps.get(1)?.as_str();
-    let century: u32 = c_str.parse::<u32>().ok().or_else(|| cn_int(c_str))?;
-    if !(1..=21).contains(&century) {
+
+    // Decade: `M十年代` (Chinese) or `\d+年代` (Arabic).
+    static RE_D: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^(十|[一二三四五六七八九]十|\d+)\s*年代$").unwrap());
+    let caps = RE_D.captures(body)?;
+    let d_str = caps.get(1)?.as_str();
+    let decade: i32 = if let Ok(n) = d_str.parse::<i32>() {
+        n
+    } else if d_str == "十" {
+        10
+    } else if let Some(prefix) = d_str.strip_suffix('十') {
+        (cn_int(prefix)? as i32) * 10
+    } else {
+        return None;
+    };
+    if !(0..=90).contains(&decade) {
         return None;
     }
-    let y_first = (century as i32 - 1) * 100 + 1;
-    let y_last = century as i32 * 100;
+    let d_start = c_start + decade;
+
+    let (y_first, y_last) = match modifier {
+        Some("very_early") | Some("early") => (d_start, d_start + 2),
+        Some("mid") => (d_start + 3, d_start + 6),
+        Some("late") | Some("very_late") => (d_start + 7, d_start + 9),
+        _ => (d_start, d_start + 9),
+    };
     let first = NaiveDate::from_ymd_opt(y_first, 1, 1)?;
     let last = NaiveDate::from_ymd_opt(y_last, 12, 31)?;
     Some(TimeInfo {
