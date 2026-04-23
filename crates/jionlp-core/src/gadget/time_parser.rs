@@ -223,6 +223,11 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if let Some(t) = try_relative_year_blur_boundary(trimmed, now) {
         return Some(t);
     }
+    // Python parity — `<M月>第N周` / `<Y年M月>第N周` / relative-month /
+    // relative-year versions. Covers 14+ parity-corpus cases.
+    if let Some(t) = try_month_week_ordinal(trimmed, now) {
+        return Some(t);
+    }
     // Round 29 #48 — `明年第10周` — limit year + week.
     if let Some(t) = try_limit_year_week(trimmed, now) {
         return Some(t);
@@ -2087,6 +2092,143 @@ fn try_bare_quarter(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         definition: "accurate",
         ..Default::default()
     })
+}
+
+/// `<M月>第N周` / `<Y年M月>第N周` / `<限定月>第N周` /
+/// `<相对年M月>第N周`. Mirrors Python's `self.month_week_pattern`.
+/// Week boundaries: week 1 starts on the first Monday of the month
+/// (Python default).
+fn try_month_week_ordinal(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    // Resolve optional year prefix (Arabic / Chinese / relative words).
+    let (year, after_year) = resolve_optional_year_prefix(text, now)?;
+
+    // Optional `的` between year and month.
+    let after_year = after_year.trim_start_matches('的');
+
+    // Resolve optional limit-month prefix (本/上/下月 etc.) OR a literal
+    // `M月` / `M月份`. Produces (month, offset_years_applied, rest).
+    // `offset_years_applied` handles the case where relative-month wraps.
+    let (month, rest_after_month) =
+        if let Some((m, rest)) = try_resolve_limit_month(after_year, now) {
+            (m, rest)
+        } else if let Some((m, rest)) = parse_month_token(after_year) {
+            // Month-份 suffix is optional.
+            let rest = rest.trim_start_matches('份');
+            (m, rest)
+        } else {
+            return None;
+        };
+
+    // Optional `的` between month and 第N周.
+    let rest = rest_after_month.trim_start_matches('的');
+
+    // `第N周` — N in 1..=5.
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^第\s*(\d+|[一二三四五])\s*周$").unwrap());
+    let caps = RE.captures(rest)?;
+    let n_str = caps.get(1)?.as_str();
+    let n: u32 = n_str.parse::<u32>().ok().or_else(|| cn_int(n_str))?;
+    if !(1..=5).contains(&n) {
+        return None;
+    }
+
+    // First Monday of the month.
+    let first = NaiveDate::from_ymd_opt(year, month, 1)?;
+    let wday = first.weekday().num_days_from_monday(); // 0..6
+    let first_monday = first + chrono::Duration::days(((7 - wday) % 7) as i64);
+    let week_start = first_monday + chrono::Duration::days(((n - 1) * 7) as i64);
+    let week_end = week_start + chrono::Duration::days(6);
+
+    Some(TimeInfo {
+        time_type: "time_span",
+        start: week_start.and_hms_opt(0, 0, 0)?,
+        end: week_end.and_hms_opt(23, 59, 59)?,
+        definition: "accurate",
+        ..Default::default()
+    })
+}
+
+/// Strip an optional year prefix (`2024年`, `二零二四年`, `今年`, `去年` …)
+/// and return `(resolved_year, rest_after_year)`. When no prefix is
+/// present, returns `(now.year(), text)` so the caller can still proceed.
+fn resolve_optional_year_prefix<'a>(text: &'a str, now: NaiveDateTime) -> Option<(i32, &'a str)> {
+    // Relative-year prefix (longest match).
+    const REL: &[(&str, i32)] = &[
+        ("大前年", -3),
+        ("大后年", 3),
+        ("明年", 1),
+        ("次年", 1),
+        ("后年", 2),
+        ("去年", -1),
+        ("前年", -2),
+        ("今年", 0),
+        ("本年", 0),
+        ("这年", 0),
+    ];
+    let mut best: Option<(i32, &str)> = None;
+    for (pref, off) in REL {
+        if let Some(rest) = text.strip_prefix(*pref) {
+            match best {
+                Some((_, r)) if r.len() < rest.len() => {}
+                _ => best = Some((*off, rest)),
+            }
+        }
+    }
+    if let Some((off, rest)) = best {
+        return Some((now.year() + off, rest));
+    }
+    // Arabic year.
+    static RE_Y: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d{2,4})\s*年").unwrap());
+    if let Some(caps) = RE_Y.captures(text) {
+        let year = parse_year(caps.get(1)?.as_str())?;
+        let rest = &text[caps.get(0)?.end()..];
+        return Some((year, rest));
+    }
+    // Chinese year.
+    static RE_CN: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^([零〇一二三四五六七八九十两]+)\s*年").unwrap());
+    if let Some(caps) = RE_CN.captures(text) {
+        let year = parse_chinese_year_digits(caps.get(1)?.as_str())?;
+        let rest = &text[caps.get(0)?.end()..];
+        return Some((year, rest));
+    }
+    // No year prefix — inherit current year.
+    Some((now.year(), text))
+}
+
+/// Resolve `本月` / `上个月` / `下月` / `当月` etc. returning `(month_1_12,
+/// rest_after_month)` inheriting year from `now`. Returns None if there
+/// is no limit-month prefix; use `parse_month_token` for literal `M月`.
+fn try_resolve_limit_month<'a>(text: &'a str, now: NaiveDateTime) -> Option<(u32, &'a str)> {
+    const MONTH_PREF: &[(&str, i32)] = &[
+        ("本月", 0),
+        ("当月", 0),
+        ("这个月", 0),
+        ("这月", 0),
+        ("下个月", 1),
+        ("下一个月", 1),
+        ("下月", 1),
+        ("上个月", -1),
+        ("上一个月", -1),
+        ("上月", -1),
+    ];
+    let mut best: Option<(i32, &str)> = None;
+    for (pref, off) in MONTH_PREF {
+        if let Some(rest) = text.strip_prefix(*pref) {
+            match best {
+                Some((_, r)) if r.len() < rest.len() => {}
+                _ => best = Some((*off, rest)),
+            }
+        }
+    }
+    let (offset, rest) = best?;
+    let mut m = now.month() as i32 + offset;
+    while m <= 0 {
+        m += 12;
+    }
+    while m > 12 {
+        m -= 12;
+    }
+    Some((m as u32, rest))
 }
 
 /// Relative-year + year-boundary: `明年初` / `去年底` / `今年年末` /
