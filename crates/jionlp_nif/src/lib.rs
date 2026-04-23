@@ -669,6 +669,72 @@ fn parse_time_with_ref(text: String, reference_iso: String) -> NifResult<Option<
     )))
 }
 
+// ── extract_time ──────────────────────────────────────────────────────────
+
+#[derive(rustler::NifStruct)]
+#[module = "Elixir.JioNLP.TimeEntity"]
+struct NifTimeEntity {
+    text: String,
+    offset: (usize, usize),
+    time_type: String,
+    detail: Option<NifTimeInfo>,
+}
+
+impl From<core::TimeEntity> for NifTimeEntity {
+    fn from(e: core::TimeEntity) -> Self {
+        NifTimeEntity {
+            text: e.text,
+            offset: e.offset,
+            time_type: e.time_type.to_string(),
+            detail: e.detail.map(Into::into),
+        }
+    }
+}
+
+/// Find every time expression in `text`. `reference_iso` may be empty
+/// (defaults to "now"); `with_parsing=false` skips resolving detail to
+/// keep the return lightweight; `ret_all=true` keeps overlapping matches.
+#[rustler::nif]
+fn extract_time(
+    text: String,
+    reference_iso: String,
+    with_parsing: bool,
+    ret_all: bool,
+) -> NifResult<Vec<NifTimeEntity>> {
+    let now = if reference_iso.is_empty() {
+        chrono::Local::now().naive_local()
+    } else {
+        let fmts = ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"];
+        let mut parsed = None;
+        for fmt in &fmts {
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&reference_iso, fmt) {
+                parsed = Some(dt);
+                break;
+            }
+        }
+        match parsed {
+            Some(dt) => dt,
+            None => {
+                return Err(rustler::Error::Term(Box::new(
+                    "reference_iso must be '' or 'YYYY-MM-DDTHH:MM:SS' / 'YYYY-MM-DD HH:MM:SS'"
+                        .to_string(),
+                )));
+            }
+        }
+    };
+    Ok(core::extract_time(&text, now, with_parsing, ret_all)
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+// ── normalize_time_period ──────────────────────────────────────────────────
+
+#[rustler::nif]
+fn normalize_time_period(text: String) -> NifResult<Option<NifTimeDelta>> {
+    Ok(core::normalize_time_period(&text).map(Into::into))
+}
+
 // ── simhash ────────────────────────────────────────────────────────────────
 
 #[rustler::nif]
