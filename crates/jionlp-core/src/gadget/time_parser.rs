@@ -1424,6 +1424,13 @@ fn try_named_period(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         }
     }
     let (offset, rest) = matched?;
+    // Track which prefix matched so we can apply Python's time_point vs
+    // time_span classification by prefix shape.
+    let matched_prefix_emphasizes_point = text.starts_with("当")
+        || text.starts_with("上一个")
+        || text.starts_with("下一个")
+        || text.starts_with("上一")
+        || text.starts_with("下一");
     // Tolerate a leading `个` — covers `上一个月` matching via `上一` with
     // rest `个月`. Also strip surrounding whitespace.
     let rest = rest.trim_start_matches('个').trim();
@@ -1434,10 +1441,12 @@ fn try_named_period(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     // be empty or trivial — we don't want to swallow "本月3日" as
     // "this-month" when the user meant "the 3rd of this month".
     let (period, is_point): (NamedPeriod, bool) = if rest == "周" || rest == "星期" {
-        // Python returns time_point for 本周/上周/下周.
+        // Python returns time_point for all named weeks.
         (NamedPeriod::Week, true)
     } else if rest == "月" {
-        (NamedPeriod::Month, false)
+        // Python returns time_point for `当月` and `上一个月` / `下一个月`;
+        // time_span for generic `本月` / `这个月`.
+        (NamedPeriod::Month, matched_prefix_emphasizes_point)
     } else if rest == "年" {
         (NamedPeriod::Year, false)
     } else if rest == "季度" {
