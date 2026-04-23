@@ -242,6 +242,16 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if let Some(t) = try_relative_year_month_day(trimmed, now) {
         return Some(t);
     }
+    // Python parity — `从X起[至今|到现在|到今天]` / `X至今` / `X到现在`:
+    // open-ended span from concrete `X` to `now`.
+    if let Some(t) = try_span_to_now(trimmed, now) {
+        return Some(t);
+    }
+    // Python parity — concrete date/time + 左右 / 前后 / 附近 suffix.
+    // Strip the approx modifier, reparse, flag definition as `blur`.
+    if let Some(t) = try_approx_modifier(trimmed, now) {
+        return Some(t);
+    }
     // Round 29 #48 — `明年第10周` — limit year + week.
     if let Some(t) = try_limit_year_week(trimmed, now) {
         return Some(t);
@@ -2106,6 +2116,74 @@ fn try_bare_quarter(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         time_type: "time_span",
         start: first.and_hms_opt(0, 0, 0)?,
         end: last.and_hms_opt(23, 59, 59)?,
+        definition: "accurate",
+        ..Default::default()
+    })
+}
+
+/// Concrete time + 左右 / 前后 / 附近. Strip the modifier, reparse,
+/// change definition to `blur`. Python keeps the same concrete result.
+fn try_approx_modifier(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    for suf in ["左右", "前后", "附近"] {
+        if let Some(body) = text.strip_suffix(suf) {
+            let body = body.trim();
+            if body.is_empty() {
+                continue;
+            }
+            let inner = parse_time_with_ref(body, now)?;
+            return Some(TimeInfo {
+                definition: "blur",
+                ..inner
+            });
+        }
+    }
+    None
+}
+
+/// `从X起[至今|到现在|到今天]` / `X至今` / `X到现在`. Returns a time_span
+/// from X's start to `now`.
+fn try_span_to_now(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    // Strip leading 从/自, strailing 起.
+    let mut body = text.trim();
+    body = body.strip_prefix('从').unwrap_or(body);
+    body = body.strip_prefix('自').unwrap_or(body);
+
+    // Accept one of the `...到现在` / `...至今` / `...到今天` endings.
+    // Order longest-first for unambiguous match.
+    const TRAILS: &[&str] = &["至现在", "至今天", "到现在", "到今天", "至今"];
+    let mut matched: Option<&str> = None;
+    for t in TRAILS {
+        if let Some(left) = body.strip_suffix(*t) {
+            matched = Some(left);
+            break;
+        }
+    }
+    // Also accept `从X起` alone (without the `至今` tail) — Python treats
+    // it as "from X to now".
+    let left = if let Some(left) = matched {
+        left
+    } else if let Some(left) = body.strip_suffix('起') {
+        left
+    } else {
+        return None;
+    };
+    let left = left.trim();
+    if left.is_empty() {
+        return None;
+    }
+    // Parse `left` as a concrete time. Must produce point/span.
+    let inner = parse_time_with_ref(left, now)?;
+    if !(inner.time_type == "time_point" || inner.time_type == "time_span") {
+        return None;
+    }
+    // Span from inner's start to `now` — guard against now-before-inner.
+    if now < inner.start {
+        return None;
+    }
+    Some(TimeInfo {
+        time_type: "time_span",
+        start: inner.start,
+        end: now,
         definition: "accurate",
         ..Default::default()
     })
