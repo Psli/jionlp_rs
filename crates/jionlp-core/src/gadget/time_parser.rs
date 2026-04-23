@@ -5132,8 +5132,57 @@ fn try_lunar_date(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         }
     };
 
-    // Step 2: parse lunar month + day.
+    // Special case: bare `廿N` or `初N` with no month — inherits lunar
+    // month from now. Python treats these as day-only lunar forms.
+    if body.starts_with('廿') || body.starts_with('卅') || body.starts_with('念') {
+        if let Some((day, tail)) = parse_lunar_day(&body) {
+            if tail.trim().is_empty() {
+                // Current lunar month.
+                use crate::gadget::lunar_solar::solar_to_lunar;
+                let (ly, lm, _ld, _is_leap) = solar_to_lunar(now.date())?;
+                if let Some(date) = lunar_to_solar(ly, lm, day, false) {
+                    return Some(TimeInfo {
+                        time_type: "time_point",
+                        start: date.and_hms_opt(0, 0, 0)?,
+                        end: date.and_hms_opt(23, 59, 59)?,
+                        definition: "accurate",
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    // Step 2: parse lunar month + optional day.
     let (lunar_month, is_leap, after_m) = parse_lunar_month(&body)?;
+    let after_m = after_m.trim();
+    if after_m.is_empty() {
+        // Whole lunar month only when the caller clearly meant lunar:
+        //   - explicit `农历` / `阴历` marker in the original text, OR
+        //   - `闰` leap-month marker, OR
+        //   - lunar-only month names (正月 / 腊月 / 冬月 / 梅月).
+        let explicit_lunar = text.contains("农历")
+            || text.contains("阴历")
+            || is_leap
+            || body.starts_with("正月")
+            || body.starts_with("腊月")
+            || body.starts_with("冬月")
+            || body.starts_with("梅月");
+        if !explicit_lunar {
+            return None;
+        }
+        // Whole lunar month: span from day 1 to lunar_month_length.
+        let n = lunar_month_length(year, lunar_month)?;
+        let start_date = lunar_to_solar(year, lunar_month, 1, is_leap)?;
+        let end_date = lunar_to_solar(year, lunar_month, n, is_leap)?;
+        return Some(TimeInfo {
+            time_type: "time_point",
+            start: start_date.and_hms_opt(0, 0, 0)?,
+            end: end_date.and_hms_opt(23, 59, 59)?,
+            definition: "accurate",
+            ..Default::default()
+        });
+    }
     let (lunar_day, tail) = parse_lunar_day(after_m)?;
     if !tail.trim().is_empty() {
         return None;
