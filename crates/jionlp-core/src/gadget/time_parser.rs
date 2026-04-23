@@ -2054,6 +2054,7 @@ fn cn_int(s: &str) -> Option<u32> {
     }
     let digit = |c: char| -> Option<u32> {
         match c {
+            '零' | '〇' => Some(0),
             '一' => Some(1),
             '二' | '两' => Some(2),
             '三' => Some(3),
@@ -3628,21 +3629,15 @@ fn try_named_weekday(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     }
     let (offset, rest) = matched?;
     let (weekday, rest) = match_weekday(rest)?;
-    if !rest.is_empty() {
-        return None;
-    }
     let today = now.date();
     let dow = today.weekday().num_days_from_monday() as i64;
     let this_mon = today - Duration::days(dow);
     let target_mon = this_mon + Duration::days(offset as i64 * 7);
     let target = target_mon + Duration::days(weekday as i64);
-    Some(TimeInfo {
-        time_type: "time_point",
-        start: target.and_hms_opt(0, 0, 0)?,
-        end: target.and_hms_opt(23, 59, 59)?,
-        definition: "accurate",
-        ..Default::default()
-    })
+    let start = target.and_hms_opt(0, 0, 0)?;
+    let end = target.and_hms_opt(23, 59, 59)?;
+    // Accept a trailing clock / period-of-day (`上周六中午12点`).
+    apply_optional_clock(start, end, rest.trim())
 }
 
 /// Pattern #47 — `YYYY年第N周` / `YYYY年第N个星期`. ISO-ish: week 1 starts
