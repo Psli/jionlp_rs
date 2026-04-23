@@ -671,17 +671,24 @@ fn date_range(
 // ───────────────────────── relative days ────────────────────────────────────
 
 fn try_relative_day(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    // Order: longest prefix first so `大大后天` beats `大后天`.
     const DAYS: &[(&str, i64)] = &[
+        ("大大前天", -4),
+        ("大大后天", 4),
         ("大前天", -3),
         ("大后天", 3),
         ("前天", -2),
         ("后天", 2),
         ("昨天", -1),
         ("昨日", -1),
+        ("昨晚", -1), // 昨晚 = last night — attach default evening period later.
         ("明天", 1),
         ("明日", 1),
+        ("明晚", 1),
         ("今天", 0),
         ("今日", 0),
+        ("今晚", 0),
+        ("当晚", 0),
     ];
 
     for (kw, offset) in DAYS {
@@ -690,7 +697,25 @@ fn try_relative_day(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
             let base = now.date() + Duration::days(*offset);
             let start = base.and_hms_opt(0, 0, 0)?;
             let end = base.and_hms_opt(23, 59, 59)?;
-            return apply_optional_clock(start, end, rest);
+            // Evening prefix (昨晚/今晚/当晚/明晚) applies an implicit
+            // `晚上` qualifier to the clock so `8时` becomes 20:00.
+            let implies_evening = matches!(*kw, "昨晚" | "今晚" | "当晚" | "明晚");
+            let rest = rest.to_string();
+            let rest = if implies_evening
+                && !rest.is_empty()
+                && !rest.starts_with("晚上")
+                && !rest.starts_with("晚")
+                && !rest.starts_with("上午")
+                && !rest.starts_with("下午")
+                && !rest.starts_with("中午")
+                && !rest.starts_with("凌晨")
+                && !rest.starts_with("傍晚")
+            {
+                format!("晚上{}", rest)
+            } else {
+                rest
+            };
+            return apply_optional_clock(start, end, &rest);
         }
     }
     None
@@ -747,6 +772,56 @@ fn apply_optional_clock(start: NaiveDateTime, end: NaiveDateTime, tail: &str) ->
     })
 }
 
+/// Replace leading Chinese numerals before `点/时` and between `点/时`
+/// and `分` with Arabic digits. Anything else passes through.
+fn cn_normalize_clock(s: &str) -> String {
+    static RE_HOUR: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"([零〇一二两三四五六七八九十]+)([点时])").unwrap());
+    static RE_MIN: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"([点时])([零〇一二两三四五六七八九十]+)(分)").unwrap());
+    static RE_SEC: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(分)([零〇一二两三四五六七八九十]+)(秒)").unwrap());
+    fn sub_once(input: &str, re: &Regex) -> String {
+        let mut out = String::new();
+        let mut last = 0;
+        for caps in re.captures_iter(input) {
+            let m = caps.get(0).unwrap();
+            out.push_str(&input[last..m.start()]);
+            // For RE_HOUR: group1=digits, group2=unit char.
+            // For RE_MIN/SEC: group1=left-marker, group2=digits, group3=right-unit.
+            let groups = caps.len();
+            if groups == 3 {
+                // RE_HOUR
+                let n_str = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                let unit = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                if let Some(n) = cn_int(n_str) {
+                    out.push_str(&n.to_string());
+                    out.push_str(unit);
+                } else {
+                    out.push_str(m.as_str());
+                }
+            } else {
+                let lm = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                let n_str = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                let rm = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+                if let Some(n) = cn_int(n_str) {
+                    out.push_str(lm);
+                    out.push_str(&n.to_string());
+                    out.push_str(rm);
+                } else {
+                    out.push_str(m.as_str());
+                }
+            }
+            last = m.end();
+        }
+        out.push_str(&input[last..]);
+        out
+    }
+    let a = sub_once(s, &RE_HOUR);
+    let b = sub_once(&a, &RE_MIN);
+    sub_once(&b, &RE_SEC)
+}
+
 /// Parse a clock expression. Accepts:
 ///   "8点", "8点30分", "8点30分15秒"
 ///   "8点半"   = 8:30    "8点一刻" = 8:15     "8点三刻" = 8:45
@@ -754,6 +829,11 @@ fn apply_optional_clock(start: NaiveDateTime, end: NaiveDateTime, tail: &str) ->
 ///   "08:30", "08:30:15"
 fn parse_clock(s: &str) -> Option<NaiveTime> {
     let s = s.trim();
+    // Normalize Chinese numeral hours/minutes to Arabic so CLOCK regex
+    // (which only matches \d) can locate them. Covers `十一点半`,
+    // `十时三十分`, `八时三十五分` etc.
+    let normalized = cn_normalize_clock(s);
+    let s = normalized.as_str();
 
     // Strip Chinese "fractional hour" suffixes first — they carry an
     // implicit minute count and must be handled before the digit regex.
