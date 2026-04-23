@@ -1053,7 +1053,9 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     // LHS: try full-year, then bare `M月D日`, then `本月N日` / `下个月N号` etc.
     let a = try_absolute_date_loose(left)
         .or_else(|| try_bare_month_day(left, now))
-        .or_else(|| try_limit_month_day(left, now))?;
+        .or_else(|| try_limit_month_day(left, now))
+        .or_else(|| try_relative_year_month_day(left, now))
+        .or_else(|| try_named_period(left, now))?;
     // For `right`, first try as a full absolute date (loose); then prefer
     // `M月D日` (inheriting left's year) BEFORE "day-only" — otherwise
     // `2017年8月11日至8月22日`'s RHS "8月22日" would mis-parse as day=8 +
@@ -1101,6 +1103,10 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         // Right side has its own `M月D日` (possibly + clock), e.g.
         // `本月10日至12日16时` case is covered above via day_token branch,
         // but `本月10日至5月1日` needs this branch.
+        t
+    } else if let Some(t) = try_limit_month_day(right, now) {
+        t
+    } else if let Some(t) = try_relative_year_month_day(right, now) {
         t
     } else {
         return None;
@@ -1962,15 +1968,37 @@ fn try_absolute_date_loose(text: &str) -> Option<TimeInfo> {
     if let Some(t) = try_absolute_date(text) {
         return Some(t);
     }
-    static RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"^(\d{2,4})\s*年\s*(\d{1,2})\s*月\s*(.+)$").unwrap());
-    let caps = RE.captures(text)?;
-    let year = parse_year(caps.get(1)?.as_str())?;
-    let month: u32 = caps.get(2)?.as_str().parse().ok()?;
-    let rest = caps.get(3)?.as_str();
-    let (day, tail) = parse_day_token(rest)?;
-    let (start, end) = date_range(year, Some(month), Some(day))?;
-    apply_optional_clock(start, end, tail.trim())
+    // `YYYY年MM月<day?>` with Chinese numerals permitted for month/day.
+    static RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"^(\d{2,4})\s*年\s*(\d{1,2}|[零〇一二三四五六七八九十]{1,3})\s*月\s*(.*)$")
+            .unwrap()
+    });
+    if let Some(caps) = RE.captures(text) {
+        let year = parse_year(caps.get(1)?.as_str())?;
+        let m_str = caps.get(2)?.as_str();
+        let month: u32 = m_str.parse::<u32>().ok().or_else(|| cn_int(m_str))?;
+        if !(1..=12).contains(&month) {
+            return None;
+        }
+        let rest = caps.get(3)?.as_str().trim();
+        if rest.is_empty() {
+            // Month-only → whole month as time_span.
+            let (start, end) = date_range(year, Some(month), None)?;
+            return Some(TimeInfo {
+                time_type: "time_span",
+                start,
+                end,
+                definition: "accurate",
+                ..Default::default()
+            });
+        }
+        if let Some((day, tail)) = parse_day_token(rest) {
+            let (start, end) = date_range(year, Some(month), Some(day))?;
+            return apply_optional_clock(start, end, tail.trim());
+        }
+        // Rest is clock-only after the month (`2019年5月15:20`)? Skip.
+    }
+    None
 }
 
 // ───────────────────────── year + span month / quarter ─────────────────────
@@ -2899,18 +2927,20 @@ fn try_limit_month_boundary(text: &str, now: NaiveDateTime) -> Option<TimeInfo> 
     };
     let last = next_first.pred_opt()?;
     let total = last.day();
+    // Python convention (accurate, narrow windows):
+    //   初 = days 1-5, 中 = 15-20, 末/底 = last 5 days.
     let (from_day, to_day) = match portion {
-        0 => (1u32, total.min(10)),
-        1 => (11u32, total.min(20)),
-        _ => ((total.saturating_sub(9)).max(21), total),
+        0 => (1u32, total.min(5)),
+        1 => (15u32, total.min(20)),
+        _ => ((total.saturating_sub(4)).max(25), total),
     };
     let from = NaiveDate::from_ymd_opt(y, m as u32, from_day)?;
     let to = NaiveDate::from_ymd_opt(y, m as u32, to_day)?;
     Some(TimeInfo {
-        time_type: "time_span",
+        time_type: "time_point",
         start: from.and_hms_opt(0, 0, 0)?,
         end: to.and_hms_opt(23, 59, 59)?,
-        definition: "blur",
+        definition: "accurate",
         ..Default::default()
     })
 }
@@ -3860,10 +3890,16 @@ fn try_open_ended_span(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     {
         (false, b)
     } else if let Some(b) = text.strip_suffix('前') {
-        // Only accept bare `前` when the preceding token is year-boundary
-        // (initial/末/底 etc.) — otherwise too ambiguous.
+        // Bare `前` after year-boundary (`年初`, `年底` etc.) OR after a
+        // concrete `YYYY年` / `YYYY年M月` that resolves to a future point.
+        // Reject pure duration forms (`三年前` = 3 years ago).
         let last = b.chars().last()?;
-        if !matches!(last, '初' | '末' | '底' | '中' | '头' | '尾') {
+        let is_boundary_suffix = matches!(last, '初' | '末' | '底' | '中' | '头' | '尾');
+        let is_concrete_year = (last == '年' || last == '月')
+            && parse_time_with_ref(b, now)
+                .map(|t| t.start >= now)
+                .unwrap_or(false);
+        if !(is_boundary_suffix || is_concrete_year) {
             return None;
         }
         (false, b)
