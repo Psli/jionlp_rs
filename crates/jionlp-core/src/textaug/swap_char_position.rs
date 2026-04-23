@@ -38,9 +38,7 @@ pub fn swap_char_position(
 
     let mut out: Vec<String> = Vec::with_capacity(n);
     let mut attempts = 0usize;
-    let cap = (n as f64 / swap_ratio.max(1e-6))
-        .min((text.chars().count() * 2) as f64) as usize
-        + n;
+    let cap = (n as f64 / swap_ratio.max(1e-6)).min((text.chars().count() * 2) as f64) as usize + n;
 
     while out.len() < n && attempts < cap {
         attempts += 1;
@@ -120,13 +118,7 @@ mod tests {
     #[test]
     fn returns_n_variants_on_long_text() {
         // Use a higher ratio to guarantee enough candidate swaps.
-        let r = swap_char_position(
-            "民盟发言人昂山素季目前情况良好正在康复中",
-            3,
-            0.2,
-            1,
-            1.0,
-        );
+        let r = swap_char_position("民盟发言人昂山素季目前情况良好正在康复中", 3, 0.2, 1, 1.0);
         assert_eq!(r.len(), 3);
     }
 

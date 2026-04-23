@@ -54,14 +54,10 @@ const BLUR_SUFFIXES: &[&str] = &["左右", "上下", "许", "许多"];
 #[allow(dead_code)]
 const RANGE_SEPS: &[&str] = &["到", "至", "-", "—", "--", "~", "～", "–"];
 /// Lower-bound modifiers — the parsed value is the floor.
-const BLUR_LO_PREFIXES: &[&str] = &[
-    "至少", "不少于", "超过", "起码", "大于", "多于", "最少",
-];
+const BLUR_LO_PREFIXES: &[&str] = &["至少", "不少于", "超过", "起码", "大于", "多于", "最少"];
 const BLUR_LO_SUFFIXES: &[&str] = &["以上", "(含)以上", "（含）以上", "多"];
 /// Upper-bound modifiers — the parsed value is the ceiling.
-const BLUR_HI_PREFIXES: &[&str] = &[
-    "近", "接近", "将近", "不到", "不足", "少于", "小于", "最多",
-];
+const BLUR_HI_PREFIXES: &[&str] = &["近", "接近", "将近", "不到", "不足", "少于", "小于", "最多"];
 const BLUR_HI_SUFFIXES: &[&str] = &["以下", "(含)以下", "（含）以下"];
 
 // Currency-name table. Longest first so the greedy match picks "人民币" over
@@ -72,7 +68,7 @@ const CURRENCY_CASES: &[(&str, &str)] = &[
     ("新台币", "新台币"),
     ("人民币", "元"),
     ("港元", "港元"),
-    ("港币", "港元"),   // 港币 → canonical 港元 (Python convention)
+    ("港币", "港元"), // 港币 → canonical 港元 (Python convention)
     ("台币", "新台币"),
     ("泰铢", "泰铢"),
     ("美元", "美元"),
@@ -91,11 +87,11 @@ const CURRENCY_CASES: &[(&str, &str)] = &[
     ("JPY", "日元"),
     ("GBP", "英镑"),
     ("块钱", "元"),
-    ("圆整", "元"),     // 大写金额 trailing — 肆佰叁拾萬圆整
-    ("圆", "元"),       // 肆佰叁拾萬圆
+    ("圆整", "元"), // 大写金额 trailing — 肆佰叁拾萬圆整
+    ("圆", "元"),   // 肆佰叁拾萬圆
     ("元", "元"),
     ("块", "元"),
-    ("毛", "元"),       // 十块三毛 — 毛 itself is a fractional word, kept as 元
+    ("毛", "元"), // 十块三毛 — 毛 itself is a fractional word, kept as 元
 ];
 
 // Unit multipliers (only the integer-scale suffixes; 分/角 and 元 are handled
@@ -146,7 +142,7 @@ pub fn parse_money_with_default(s: &str, default_unit: &str) -> Option<MoneyInfo
         .split_ascii_whitespace()
         .collect::<Vec<_>>()
         .join("");
-    let collapsed = collapsed.replace(|c: char| c == '\u{3000}' || c == ' ', "");
+    let collapsed = collapsed.replace(['\u{3000}', ' '], "");
     // `个` as numeric filler between digit and big-unit (`两个亿` → `两亿`,
     // `三个万` → `三万`) is treated as optional by Python.
     let collapsed = collapsed
@@ -423,7 +419,7 @@ fn try_parse_range(s: &str, default_unit: &str) -> Option<MoneyInfo> {
                 .iter()
                 .find(|(u, _)| r_body.ends_with(*u))
                 .map(|(u, m)| (*u, *m))
-                .or_else(|| r_casual_mult);
+                .or(r_casual_mult);
             let l_has_arabic = l_body.chars().any(|c| c.is_ascii_digit());
             if let Some((r_char, r_mul)) = r_outer {
                 let l_already = l_body.contains(r_char);
@@ -450,7 +446,6 @@ fn try_parse_range(s: &str, default_unit: &str) -> Option<MoneyInfo> {
     None
 }
 
-
 fn split_once_meaningful<'a>(s: &'a str, sep: &str) -> Option<(&'a str, &'a str)> {
     // Skip cases where the separator is at the start (e.g. "-100" = negative).
     let idx = s.find(sep)?;
@@ -470,9 +465,35 @@ fn has_any_digit(s: &str) -> bool {
         c.is_ascii_digit()
             || matches!(
                 c,
-                '零' | '一' | '二' | '两' | '三' | '四' | '五' | '六' | '七' | '八' | '九'
-                | '壹' | '贰' | '叁' | '肆' | '伍' | '陆' | '柒' | '捌' | '玖'
-                | '十' | '拾' | '百' | '佰' | '千' | '仟' | '万' | '萬' | '亿' | '兆'
+                '零' | '一'
+                    | '二'
+                    | '两'
+                    | '三'
+                    | '四'
+                    | '五'
+                    | '六'
+                    | '七'
+                    | '八'
+                    | '九'
+                    | '壹'
+                    | '贰'
+                    | '叁'
+                    | '肆'
+                    | '伍'
+                    | '陆'
+                    | '柒'
+                    | '捌'
+                    | '玖'
+                    | '十'
+                    | '拾'
+                    | '百'
+                    | '佰'
+                    | '千'
+                    | '仟'
+                    | '万'
+                    | '萬'
+                    | '亿'
+                    | '兆'
             )
     })
 }
@@ -558,9 +579,34 @@ fn carve_trailing_number(s: &str) -> (&str, &str) {
             || ch == '.'
             || matches!(
                 ch,
-                '零' | '〇' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九'
-                | '壹' | '贰' | '叁' | '肆' | '伍' | '陆' | '柒' | '捌' | '玖'
-                | '两' | '十' | '百' | '千' | '万' | '亿' | '拾' | '佰' | '仟'
+                '零' | '〇'
+                    | '一'
+                    | '二'
+                    | '三'
+                    | '四'
+                    | '五'
+                    | '六'
+                    | '七'
+                    | '八'
+                    | '九'
+                    | '壹'
+                    | '贰'
+                    | '叁'
+                    | '肆'
+                    | '伍'
+                    | '陆'
+                    | '柒'
+                    | '捌'
+                    | '玖'
+                    | '两'
+                    | '十'
+                    | '百'
+                    | '千'
+                    | '万'
+                    | '亿'
+                    | '拾'
+                    | '佰'
+                    | '仟'
             );
         if is_num {
             split_at = idx;
@@ -679,9 +725,15 @@ fn try_blur_quantifier(s: &str, default_unit: &str) -> Option<MoneyInfo> {
 
     let digit = |c: char| -> Option<f64> {
         match c {
-            '一' => Some(1.0), '二' | '两' => Some(2.0), '三' => Some(3.0),
-            '四' => Some(4.0), '五' => Some(5.0), '六' => Some(6.0),
-            '七' => Some(7.0), '八' => Some(8.0), '九' => Some(9.0),
+            '一' => Some(1.0),
+            '二' | '两' => Some(2.0),
+            '三' => Some(3.0),
+            '四' => Some(4.0),
+            '五' => Some(5.0),
+            '六' => Some(6.0),
+            '七' => Some(7.0),
+            '八' => Some(8.0),
+            '九' => Some(9.0),
             _ => None,
         }
     };
@@ -719,10 +771,7 @@ fn try_blur_quantifier(s: &str, default_unit: &str) -> Option<MoneyInfo> {
         (10_000.0, 100_000.0, 2)
     } else if chars[0] == '数' && chars.get(1) == Some(&'亿') {
         (1e8, 1e9, 2)
-    } else if let (Some(a), Some(b)) = (
-        digit(chars[0]),
-        chars.get(1).and_then(|c| digit(*c)),
-    ) {
+    } else if let (Some(a), Some(b)) = (digit(chars[0]), chars.get(1).and_then(|c| digit(*c))) {
         // Two consecutive CN digits: 八九 → Range(8, 9).
         (a, b, 2)
     } else {

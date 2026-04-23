@@ -60,9 +60,9 @@ pub fn parse_id_card(id_card: &str) -> Result<Option<IdCardInfo>> {
     };
 
     // 17th char (index 16) encodes gender: odd → male, even → female.
-    let gender_digit = chars[16].to_digit(10).ok_or_else(|| {
-        Error::InvalidArg("non-digit in gender position of id_card".into())
-    })?;
+    let gender_digit = chars[16]
+        .to_digit(10)
+        .ok_or_else(|| Error::InvalidArg("non-digit in gender position of id_card".into()))?;
     let gender: &'static str = if gender_digit % 2 == 1 { "男" } else { "女" };
 
     let check_code = match chars[17] {

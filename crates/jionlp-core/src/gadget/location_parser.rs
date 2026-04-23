@@ -80,7 +80,9 @@ pub fn parse_location_full(
 /// Populate `res.town` / `res.village` by looking up the town/village map
 /// keyed by prov+city+county and finding any of the entries in `res.detail`.
 fn attach_town_village(res: &mut LocationParseResult) {
-    let Ok(map) = dict::town_village_map() else { return };
+    let Ok(map) = dict::town_village_map() else {
+        return;
+    };
     let key = format!(
         "{}{}{}",
         res.province.as_deref().unwrap_or(""),
@@ -142,11 +144,9 @@ fn build_index() -> Result<AdminIndex> {
 
     // Municipalities (city = province name) to skip when building
     // province-only entries so they go through the city path.
-    let municipalities: FxHashSet<&'static str> = [
-        "北京", "上海", "天津", "重庆", "香港", "澳门",
-    ]
-    .into_iter()
-    .collect();
+    let municipalities: FxHashSet<&'static str> = ["北京", "上海", "天津", "重庆", "香港", "澳门"]
+        .into_iter()
+        .collect();
 
     // For each code in dict, classify & emit entries similarly to Python's
     // `_mapping`. We emit province-level entry for non-municipal provinces,
@@ -295,22 +295,25 @@ fn get_candidates(idx: &AdminIndex, text: &str) -> Vec<ScoredCandidate> {
                 // wrong. Convert byte gap to char gap via the preceding-
                 // prefix length to detect.
                 fn char_gap(text: &str, a: i64, b: i64) -> i64 {
-                    let (lo, hi) = if a <= b { (a as usize, b as usize) } else { (b as usize, a as usize) };
+                    let (lo, hi) = if a <= b {
+                        (a as usize, b as usize)
+                    } else {
+                        (b as usize, a as usize)
+                    };
                     text[lo..hi].chars().count() as i64
                 }
-                if i >= 1 && offsets[i - 1].0 >= 0 {
-                    if char_gap(text, offsets[i - 1].0, offsets[i].0) == 1 {
-                        count = 0;
-                        broken = true;
-                        break;
-                    }
+                if i >= 1
+                    && offsets[i - 1].0 >= 0
+                    && char_gap(text, offsets[i - 1].0, offsets[i].0) == 1
+                {
+                    count = 0;
+                    broken = true;
+                    break;
                 }
-                if i == 2 && offsets[0].0 >= 0 {
-                    if char_gap(text, offsets[0].0, offsets[2].0) == 1 {
-                        count = 0;
-                        broken = true;
-                        break;
-                    }
+                if i == 2 && offsets[0].0 >= 0 && char_gap(text, offsets[0].0, offsets[2].0) == 1 {
+                    count = 0;
+                    broken = true;
+                    break;
                 }
             }
         }
@@ -335,16 +338,12 @@ fn get_candidates(idx: &AdminIndex, text: &str) -> Vec<ScoredCandidate> {
     out
 }
 
-fn filter_candidates(
-    mut candidates: Vec<ScoredCandidate>,
-    _text: &str,
-) -> Vec<ScoredCandidate> {
+fn filter_candidates(mut candidates: Vec<ScoredCandidate>, _text: &str) -> Vec<ScoredCandidate> {
     // Step 2.0 — drop entries where the same text offset matched a higher
     // level's full-name AND a lower level's alias (e.g. 湖南省长沙市 →
     // drop the 长沙县 alias match because 长沙市 full-name is at same offset).
     candidates.retain(|c| {
-        let mut seen: rustc_hash::FxHashMap<i64, Vec<i8>> =
-            rustc_hash::FxHashMap::default();
+        let mut seen: rustc_hash::FxHashMap<i64, Vec<i8>> = rustc_hash::FxHashMap::default();
         for (pos, alias) in c.offsets.iter() {
             if *pos >= 0 {
                 seen.entry(*pos).or_default().push(*alias);
@@ -375,8 +374,11 @@ fn filter_candidates(
         let o0: Vec<i64> = candidates[0].offsets.iter().map(|x| x.0).collect();
         let o1: Vec<i64> = candidates[1].offsets.iter().map(|x| x.0).collect();
         if o0 == o1 {
-            let keep: Vec<ScoredCandidate> =
-                candidates.iter().filter(|c| c.entry.is_new).cloned().collect();
+            let keep: Vec<ScoredCandidate> = candidates
+                .iter()
+                .filter(|c| c.entry.is_new)
+                .cloned()
+                .collect();
             if !keep.is_empty() {
                 candidates = keep;
             }
@@ -418,14 +420,21 @@ fn filter_candidates(
     // Step 2.3 — prefer full-name over alias matches.
     // case 1: min over the non-negative alias_flags for the candidate.
     fn min_alias(c: &ScoredCandidate) -> i8 {
-        c.offsets.iter().filter_map(|x| if x.0 >= 0 { Some(x.1) } else { None }).min().unwrap_or(1)
+        c.offsets
+            .iter()
+            .filter_map(|x| if x.0 >= 0 { Some(x.1) } else { None })
+            .min()
+            .unwrap_or(1)
     }
     let min_a = candidates.iter().map(min_alias).min().unwrap_or(1);
     candidates.retain(|c| min_alias(c) == min_a);
 
     // case 2: sum of alias_flags — lower is better.
     fn sum_alias(c: &ScoredCandidate) -> i32 {
-        c.offsets.iter().filter_map(|x| if x.0 >= 0 { Some(x.1 as i32) } else { None }).sum()
+        c.offsets
+            .iter()
+            .filter_map(|x| if x.0 >= 0 { Some(x.1 as i32) } else { None })
+            .sum()
     }
     let min_sum = candidates.iter().map(sum_alias).min().unwrap_or(0);
     candidates.retain(|c| sum_alias(c) == min_sum);
@@ -498,8 +507,16 @@ fn assemble_final(
     let mut prov = None;
     let mut city = None;
     let mut county = None;
-    let levels = [&candidate.entry.prov, &candidate.entry.city, &candidate.entry.county];
-    let names_by_level = [&candidate.entry.prov, &candidate.entry.city, &candidate.entry.county];
+    let levels = [
+        &candidate.entry.prov,
+        &candidate.entry.city,
+        &candidate.entry.county,
+    ];
+    let names_by_level = [
+        &candidate.entry.prov,
+        &candidate.entry.city,
+        &candidate.entry.county,
+    ];
     for (i, off) in candidate.offsets.iter().enumerate() {
         if off.0 < 0 {
             continue;
@@ -565,7 +582,11 @@ fn assemble_final(
     if city.as_deref().map(|s| s.contains("直辖")).unwrap_or(false) {
         city = None;
     }
-    if county.as_deref().map(|s| s.contains("直辖")).unwrap_or(false) {
+    if county
+        .as_deref()
+        .map(|s| s.contains("直辖"))
+        .unwrap_or(false)
+    {
         county = None;
     }
 

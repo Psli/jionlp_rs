@@ -41,7 +41,7 @@ struct RecognizerIndex {
 static INDEX: OnceCell<RecognizerIndex> = OnceCell::new();
 
 fn index() -> Result<&'static RecognizerIndex> {
-    INDEX.get_or_try_init(|| build_index())
+    INDEX.get_or_try_init(build_index)
 }
 
 /// Mainland province/autonomous-region/municipality single-char abbreviations.
@@ -205,9 +205,7 @@ pub fn parse_location(text: &str) -> Result<ParsedLocation> {
     };
     for m in matches {
         match m.level {
-            LocationLevel::Province if parsed.province.is_none() => {
-                parsed.province = Some(m.name)
-            }
+            LocationLevel::Province if parsed.province.is_none() => parsed.province = Some(m.name),
             LocationLevel::City if parsed.city.is_none() => parsed.city = Some(m.name),
             LocationLevel::County if parsed.county.is_none() => parsed.county = Some(m.name),
             _ => {}

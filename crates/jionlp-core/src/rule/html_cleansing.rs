@@ -16,16 +16,13 @@ use regex::Regex;
 // CJK chars inside a tag so that "<" followed by Chinese text doesn't get
 // mis-matched as a tag.
 static HTML_TAG_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"<[^<\u{4E00}-\u{9FA5}，。；！？、“”‘’（）—《》…●]+?>")
-        .expect("HTML_TAG_PATTERN")
+    Regex::new(r"<[^<\u{4E00}-\u{9FA5}，。；！？、“”‘’（）—《》…●]+?>").expect("HTML_TAG_PATTERN")
 });
 
-static SCRIPT_TAG_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?is)<script[\s\S]*?</script>").expect("SCRIPT_TAG_PATTERN")
-});
-static STYLE_TAG_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?is)<style[\s\S]*?</style>").expect("STYLE_TAG_PATTERN")
-});
+static SCRIPT_TAG_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?is)<script[\s\S]*?</script>").expect("SCRIPT_TAG_PATTERN"));
+static STYLE_TAG_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?is)<style[\s\S]*?</style>").expect("STYLE_TAG_PATTERN"));
 static COMMENT_TAG_PATTERN: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"<!--[\s\S]*?-->").expect("COMMENT_TAG_PATTERN"));
 
@@ -87,7 +84,9 @@ fn resolve_entity(name: &str) -> Option<char> {
         } else {
             (10u32, rest)
         };
-        return u32::from_str_radix(digits, radix).ok().and_then(char::from_u32);
+        return u32::from_str_radix(digits, radix)
+            .ok()
+            .and_then(char::from_u32);
     }
     Some(match name {
         "lt" => '<',
@@ -142,22 +141,140 @@ pub fn remove_redundant_char(text: &str, custom: Option<&str>) -> String {
     }
 }
 
+// ───────────────────────── meta + menu helpers (Round 31) ────────────────
+
+static META_TAG_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?is)<meta[^>]*?>"#).expect("META_TAG_PATTERN"));
+static META_NAME_ATTR: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?i)name\s*=\s*['"]([^'"]+)['"]"#).expect("META_NAME_ATTR"));
+static META_CONTENT_ATTR: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?is)content\s*=\s*['"]([^'"]*)['"]"#).expect("META_CONTENT_ATTR"));
+
+/// Extract meta-tag attributes from an HTML document into a map.
+/// Recognized keys (matching Python): description, keywords,
+/// classification, language. Other keys are ignored.
+pub fn extract_meta_info(html: &str) -> std::collections::HashMap<String, String> {
+    let mut out: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for tag in META_TAG_PATTERN.find_iter(html) {
+        let s = tag.as_str();
+        let name = META_NAME_ATTR
+            .captures(s)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_ascii_lowercase());
+        let content = META_CONTENT_ATTR
+            .captures(s)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string());
+        if let (Some(n), Some(c)) = (name, content) {
+            if ["description", "keywords", "classification", "language"].contains(&n.as_str()) {
+                out.insert(n, c);
+            }
+        }
+    }
+    out
+}
+
+/// Keywords in div id/class that mark navigational / menu blocks — mirrors
+/// Python's `div_attr_remove_list` (approx).
+const MENU_KEYWORDS: &[&str] = &[
+    "menu",
+    "nav",
+    "sidebar",
+    "header",
+    "footer",
+    "navbar",
+    "copyright",
+    "ad",
+    "advert",
+    "banner",
+    "tab",
+    "breadcrumb",
+];
+
+static DIV_OPEN_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?is)<div\b[^>]*>"#).expect("DIV_OPEN"));
+static ATTR_ID_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?i)\bid\s*=\s*['"]([^'"]+)['"]"#).expect("ATTR_ID"));
+static ATTR_CLASS_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?i)\bclass\s*=\s*['"]([^'"]+)['"]"#).expect("ATTR_CLASS"));
+
+/// Remove `<div>` blocks whose id/class contains any of the menu keywords.
+/// Performs a forward scan with depth tracking to skip the entire subtree.
+pub fn remove_menu_div_tag(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut cursor = 0usize;
+    while cursor < html.len() {
+        // Find next <div ...>.
+        let slice = &html[cursor..];
+        let Some(m) = DIV_OPEN_PATTERN.find(slice) else {
+            out.push_str(slice);
+            break;
+        };
+        let abs_start = cursor + m.start();
+        out.push_str(&html[cursor..abs_start]);
+        let tag_text = &html[abs_start..cursor + m.end()];
+
+        let id_match = ATTR_ID_PATTERN
+            .captures(tag_text)
+            .and_then(|c| c.get(1))
+            .map(|x| x.as_str().to_ascii_lowercase());
+        let class_match = ATTR_CLASS_PATTERN
+            .captures(tag_text)
+            .and_then(|c| c.get(1))
+            .map(|x| x.as_str().to_ascii_lowercase());
+        let is_menu = MENU_KEYWORDS.iter().any(|kw| {
+            id_match.as_deref().map(|s| s.contains(kw)).unwrap_or(false)
+                || class_match
+                    .as_deref()
+                    .map(|s| s.contains(kw))
+                    .unwrap_or(false)
+        });
+
+        if is_menu {
+            // Skip matching close tag at balanced depth.
+            let mut depth = 1i32;
+            let mut scan = cursor + m.end();
+            while depth > 0 && scan < html.len() {
+                let rest = &html[scan..];
+                let open_match = DIV_OPEN_PATTERN.find(rest);
+                let close_match = rest.find("</div>");
+                match (open_match, close_match) {
+                    (Some(om), Some(ci)) if om.start() < ci => {
+                        depth += 1;
+                        scan += om.end();
+                    }
+                    (_, Some(ci)) => {
+                        depth -= 1;
+                        scan += ci + "</div>".len();
+                    }
+                    _ => break,
+                }
+            }
+            cursor = scan;
+        } else {
+            out.push_str(tag_text);
+            cursor += m.end();
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn strips_simple_tags() {
-        assert_eq!(
-            remove_html_tag("<p>hello <b>world</b></p>"),
-            "hello world"
-        );
+        assert_eq!(remove_html_tag("<p>hello <b>world</b></p>"), "hello world");
     }
 
     #[test]
     fn preserves_chinese_lt() {
         // "<中文" should not be consumed as a start of a tag.
-        assert_eq!(remove_html_tag("<p>中文<b>text</b>结束</p>"), "中文text结束");
+        assert_eq!(
+            remove_html_tag("<p>中文<b>text</b>结束</p>"),
+            "中文text结束"
+        );
     }
 
     #[test]
@@ -192,10 +309,7 @@ mod tests {
 
     #[test]
     fn remove_redundant_custom() {
-        assert_eq!(
-            remove_redundant_char("a!b?c.", Some("!?.")),
-            "abc"
-        );
+        assert_eq!(remove_redundant_char("a!b?c.", Some("!?.")), "abc");
     }
 
     #[test]
@@ -214,115 +328,4 @@ mod tests {
         assert!(!out.contains("menu"));
         assert!(out.contains("body"));
     }
-}
-
-// ───────────────────────── meta + menu helpers (Round 31) ────────────────
-
-static META_TAG_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?is)<meta[^>]*?>"#).expect("META_TAG_PATTERN")
-});
-static META_NAME_ATTR: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)name\s*=\s*['"]([^'"]+)['"]"#).expect("META_NAME_ATTR")
-});
-static META_CONTENT_ATTR: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?is)content\s*=\s*['"]([^'"]*)['"]"#).expect("META_CONTENT_ATTR")
-});
-
-/// Extract meta-tag attributes from an HTML document into a map.
-/// Recognized keys (matching Python): description, keywords,
-/// classification, language. Other keys are ignored.
-pub fn extract_meta_info(html: &str) -> std::collections::HashMap<String, String> {
-    let mut out: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for tag in META_TAG_PATTERN.find_iter(html) {
-        let s = tag.as_str();
-        let name = META_NAME_ATTR
-            .captures(s)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_ascii_lowercase());
-        let content = META_CONTENT_ATTR
-            .captures(s)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_string());
-        if let (Some(n), Some(c)) = (name, content) {
-            if ["description", "keywords", "classification", "language"].contains(&n.as_str()) {
-                out.insert(n, c);
-            }
-        }
-    }
-    out
-}
-
-/// Keywords in div id/class that mark navigational / menu blocks — mirrors
-/// Python's `div_attr_remove_list` (approx).
-const MENU_KEYWORDS: &[&str] = &[
-    "menu", "nav", "sidebar", "header", "footer", "navbar",
-    "copyright", "ad", "advert", "banner", "tab", "breadcrumb",
-];
-
-static DIV_OPEN_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?is)<div\b[^>]*>"#).expect("DIV_OPEN")
-});
-static ATTR_ID_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)\bid\s*=\s*['"]([^'"]+)['"]"#).expect("ATTR_ID")
-});
-static ATTR_CLASS_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)\bclass\s*=\s*['"]([^'"]+)['"]"#).expect("ATTR_CLASS")
-});
-
-/// Remove `<div>` blocks whose id/class contains any of the menu keywords.
-/// Performs a forward scan with depth tracking to skip the entire subtree.
-pub fn remove_menu_div_tag(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let mut cursor = 0usize;
-    while cursor < html.len() {
-        // Find next <div ...>.
-        let slice = &html[cursor..];
-        let Some(m) = DIV_OPEN_PATTERN.find(slice) else {
-            out.push_str(slice);
-            break;
-        };
-        let abs_start = cursor + m.start();
-        out.push_str(&html[cursor..abs_start]);
-        let tag_text = &html[abs_start..cursor + m.end()];
-
-        let id_match = ATTR_ID_PATTERN
-            .captures(tag_text)
-            .and_then(|c| c.get(1))
-            .map(|x| x.as_str().to_ascii_lowercase());
-        let class_match = ATTR_CLASS_PATTERN
-            .captures(tag_text)
-            .and_then(|c| c.get(1))
-            .map(|x| x.as_str().to_ascii_lowercase());
-        let is_menu = MENU_KEYWORDS.iter().any(|kw| {
-            id_match.as_deref().map(|s| s.contains(kw)).unwrap_or(false)
-                || class_match.as_deref().map(|s| s.contains(kw)).unwrap_or(false)
-        });
-
-        if is_menu {
-            // Skip matching close tag at balanced depth.
-            let mut depth = 1i32;
-            let mut scan = cursor + m.end();
-            while depth > 0 && scan < html.len() {
-                let rest = &html[scan..];
-                let open_match = DIV_OPEN_PATTERN.find(rest);
-                let close_match = rest.find("</div>");
-                match (open_match, close_match) {
-                    (Some(om), Some(ci)) if om.start() < ci => {
-                        depth += 1;
-                        scan += om.end();
-                    }
-                    (_, Some(ci)) => {
-                        depth -= 1;
-                        scan += ci + "</div>".len();
-                    }
-                    _ => break,
-                }
-            }
-            cursor = scan;
-        } else {
-            out.push_str(tag_text);
-            cursor += m.end();
-        }
-    }
-    out
 }

@@ -4,8 +4,8 @@
 //! Four levels: province / city / county / town. The Rust API mirrors
 //! Python's four standalone methods but exposes them as free functions.
 
-use regex::Regex;
 use once_cell::sync::Lazy;
+use regex::Regex;
 use rustc_hash::FxHashMap;
 
 /// 省级 简称 pattern — matches any of the 34 province/municipality/SAR
@@ -42,11 +42,7 @@ pub fn get_china_province_alias(name: &str) -> Option<&str> {
 }
 
 /// Return the city short-name — handles 市/地区/盟/自治州.
-pub fn get_china_city_alias(
-    name: &str,
-    dismiss_diqu: bool,
-    dismiss_meng: bool,
-) -> Option<String> {
+pub fn get_china_city_alias(name: &str, dismiss_diqu: bool, dismiss_meng: bool) -> Option<String> {
     if let Some(rest) = name.strip_suffix('市') {
         return Some(rest.to_string());
     }
@@ -74,37 +70,55 @@ pub fn get_china_city_alias(
 /// Python reference (`_prepare_qi_alias_map`).
 static QI_MAP: Lazy<FxHashMap<&'static str, &'static str>> = Lazy::new(|| {
     let pairs: &[(&str, &str)] = &[
-        ("土默特右旗", "土右旗"), ("土默特左旗", "土左旗"),
-        ("杭锦后旗", "杭后旗"), ("杭锦旗", "杭旗"),
-        ("乌拉特后旗", "乌后旗"), ("乌拉特中旗", "乌中旗"),
+        ("土默特右旗", "土右旗"),
+        ("土默特左旗", "土左旗"),
+        ("杭锦后旗", "杭后旗"),
+        ("杭锦旗", "杭旗"),
+        ("乌拉特后旗", "乌后旗"),
+        ("乌拉特中旗", "乌中旗"),
         ("阿鲁科尔沁旗", "阿旗"),
         ("敖汉旗", "敖旗"),
-        ("巴林右旗", "巴右旗"), ("巴林左旗", "巴左旗"),
+        ("巴林右旗", "巴右旗"),
+        ("巴林左旗", "巴左旗"),
         ("喀喇沁旗", "喀旗"),
         ("克什克腾旗", "克旗"),
         ("翁牛特旗", "翁旗"),
         ("达拉特旗", "达旗"),
-        ("鄂托克旗", "鄂旗"), ("鄂托克前旗", "鄂前旗"),
+        ("鄂托克旗", "鄂旗"),
+        ("鄂托克前旗", "鄂前旗"),
         ("乌审旗", "乌旗"),
         ("伊金霍洛旗", "伊旗"),
         ("准格尔旗", "准旗"),
         ("阿荣旗", "阿荣旗"),
         ("陈巴尔虎旗", "陈旗"),
-        ("鄂伦春自治旗", "鄂伦春"), ("鄂温克族自治旗", "鄂温克"),
+        ("鄂伦春自治旗", "鄂伦春"),
+        ("鄂温克族自治旗", "鄂温克"),
         ("莫力达瓦达斡尔族自治旗", "莫旗"),
-        ("新巴尔虎右旗", "新右旗"), ("新巴尔虎左旗", "新左旗"),
-        ("科尔沁左翼后旗", "科左后旗"), ("科尔沁左翼中旗", "科左中旗"),
-        ("科尔沁右翼前旗", "科右前旗"), ("科尔沁右翼中旗", "科右中旗"),
-        ("库伦旗", "库旗"), ("奈曼旗", "奈旗"),
-        ("扎鲁特旗", "扎旗"), ("扎赉特旗", "扎赉特旗"),
-        ("察哈尔右翼后旗", "察右后旗"), ("察哈尔右翼前旗", "察右前旗"),
+        ("新巴尔虎右旗", "新右旗"),
+        ("新巴尔虎左旗", "新左旗"),
+        ("科尔沁左翼后旗", "科左后旗"),
+        ("科尔沁左翼中旗", "科左中旗"),
+        ("科尔沁右翼前旗", "科右前旗"),
+        ("科尔沁右翼中旗", "科右中旗"),
+        ("库伦旗", "库旗"),
+        ("奈曼旗", "奈旗"),
+        ("扎鲁特旗", "扎旗"),
+        ("扎赉特旗", "扎赉特旗"),
+        ("察哈尔右翼后旗", "察右后旗"),
+        ("察哈尔右翼前旗", "察右前旗"),
         ("察哈尔右翼中旗", "察右中旗"),
-        ("四子王旗", "四子王旗"), ("阿巴嘎旗", "阿巴嘎旗"),
-        ("东乌珠穆沁旗", "东乌旗"), ("西乌珠穆沁旗", "西乌旗"),
-        ("苏尼特右旗", "苏右旗"), ("苏尼特左旗", "苏左旗"),
+        ("四子王旗", "四子王旗"),
+        ("阿巴嘎旗", "阿巴嘎旗"),
+        ("东乌珠穆沁旗", "东乌旗"),
+        ("西乌珠穆沁旗", "西乌旗"),
+        ("苏尼特右旗", "苏右旗"),
+        ("苏尼特左旗", "苏左旗"),
         ("太仆寺旗", "太仆寺旗"),
-        ("镶黄旗", "镶黄旗"), ("正蓝旗", "正蓝旗"), ("正镶白旗", "正镶白旗"),
-        ("阿拉善右旗", "阿右旗"), ("阿拉善左旗", "阿左旗"),
+        ("镶黄旗", "镶黄旗"),
+        ("正蓝旗", "正蓝旗"),
+        ("正镶白旗", "正镶白旗"),
+        ("阿拉善右旗", "阿右旗"),
+        ("阿拉善左旗", "阿左旗"),
         ("额济纳旗", "额旗"),
         ("达尔罕茂明安联合旗", "达旗"),
     ];
@@ -133,9 +147,7 @@ pub fn get_china_county_alias(name: &str, dismiss_qi: bool) -> Option<String> {
         return Some(rest.to_string());
     }
     if !dismiss_qi && name.ends_with('旗') {
-        return Some(
-            QI_MAP.get(name).copied().unwrap_or(name).to_string(),
-        );
+        return Some(QI_MAP.get(name).copied().unwrap_or(name).to_string());
     }
     if let Some(m) = MINORITY_1.find(name) {
         return Some(name[..m.start()].to_string());
@@ -191,8 +203,14 @@ mod tests {
 
     #[test]
     fn city_short_shi_and_diqu() {
-        assert_eq!(get_china_city_alias("仙桃市", false, false), Some("仙桃".to_string()));
-        assert_eq!(get_china_city_alias("柳州地区", false, false), Some("柳州".to_string()));
+        assert_eq!(
+            get_china_city_alias("仙桃市", false, false),
+            Some("仙桃".to_string())
+        );
+        assert_eq!(
+            get_china_city_alias("柳州地区", false, false),
+            Some("柳州".to_string())
+        );
     }
 
     #[test]

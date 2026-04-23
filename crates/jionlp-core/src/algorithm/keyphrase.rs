@@ -22,9 +22,9 @@ use rustc_hash::FxHashMap;
 
 /// Punctuation characters that terminate a candidate phrase.
 const PUNCTUATION: &[char] = &[
-    '，', '。', '！', '？', '、', '；', '：', '“', '”', '‘', '’', '（', '）', '《', '》',
-    '—', '·', ',', '.', '!', '?', ';', ':', '"', '\'', '(', ')', '<', '>', '[', ']',
-    '{', '}', '/', '\\', '|', '\t', '\n', '\r', ' ',
+    '，', '。', '！', '？', '、', '；', '：', '“', '”', '‘', '’', '（', '）', '《', '》', '—', '·',
+    ',', '.', '!', '?', ';', ':', '"', '\'', '(', ')', '<', '>', '[', ']', '{', '}', '/', '\\',
+    '|', '\t', '\n', '\r', ' ',
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,7 +93,11 @@ pub fn extract_keyphrase(
         })
         .collect();
 
-    scored.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.weight
+            .partial_cmp(&a.weight)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     scored.truncate(top_k);
     Ok(scored)
 }
@@ -217,7 +221,11 @@ pub fn extract_keyphrase_textrank(
             weight: score[id],
         })
         .collect();
-    result.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(std::cmp::Ordering::Equal));
+    result.sort_by(|a, b| {
+        b.weight
+            .partial_cmp(&a.weight)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     result.truncate(top_k);
     Ok(result)
 }
@@ -250,9 +258,7 @@ fn is_all_stopwords(phrase: &str, stopwords: &rustc_hash::FxHashSet<String>) -> 
     if stopwords.contains(phrase) {
         return true;
     }
-    phrase
-        .chars()
-        .all(|c| stopwords.contains(&c.to_string()))
+    phrase.chars().all(|c| stopwords.contains(&c.to_string()))
 }
 
 fn char_idf(term: &str, idf: &FxHashMap<String, f64>) -> f64 {
@@ -280,8 +286,7 @@ mod tests {
     #[test]
     fn returns_top_k() {
         ensure_init();
-        let text =
-            "机器学习是人工智能的一个分支,研究如何从数据中自动学习规律和模式。\
+        let text = "机器学习是人工智能的一个分支,研究如何从数据中自动学习规律和模式。\
              机器学习广泛应用于自然语言处理、计算机视觉和推荐系统。";
         let r = extract_keyphrase(text, 5, 2, 4).unwrap();
         assert!(r.len() <= 5);
@@ -308,7 +313,11 @@ mod tests {
         let text = "苹果,香蕉";
         let r = extract_keyphrase(text, 5, 2, 2).unwrap();
         for k in &r {
-            assert!(!k.phrase.contains("果香"), "crossed punctuation: {}", k.phrase);
+            assert!(
+                !k.phrase.contains("果香"),
+                "crossed punctuation: {}",
+                k.phrase
+            );
         }
     }
 
@@ -324,7 +333,9 @@ mod tests {
         ensure_init();
         let r = extract_keyphrase(
             "北京是中国的首都。北京有很多名胜古迹。北京人口众多。",
-            10, 2, 4,
+            10,
+            2,
+            4,
         )
         .unwrap();
         for w in r.windows(2) {
@@ -346,11 +357,9 @@ mod tests {
     #[test]
     fn textrank_sorted_descending() {
         ensure_init();
-        let r = extract_keyphrase_textrank(
-            "北京是中国首都。北京有名胜古迹。北京人口多。",
-            10, 2, 4,
-        )
-        .unwrap();
+        let r =
+            extract_keyphrase_textrank("北京是中国首都。北京有名胜古迹。北京人口多。", 10, 2, 4)
+                .unwrap();
         for w in r.windows(2) {
             assert!(w[0].weight >= w[1].weight);
         }

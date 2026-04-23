@@ -61,15 +61,14 @@ pub fn analyse_freq_words(
 ) -> FxHashMap<String, Vec<(String, usize)>> {
     let mut per_class: FxHashMap<String, FxHashMap<String, usize>> = FxHashMap::default();
     for (label, text) in items {
-        let entry = per_class
-            .entry((*label).to_string())
-            .or_insert_with(FxHashMap::default);
+        let entry = per_class.entry((*label).to_string()).or_default();
         for c in text.chars() {
             let s = c.to_string();
             if stopwords.contains(&s) {
                 continue;
             }
-            if c.is_whitespace() || !(('\u{4E00}'..='\u{9FA5}').contains(&c) || c.is_alphanumeric()) {
+            if c.is_whitespace() || !(('\u{4E00}'..='\u{9FA5}').contains(&c) || c.is_alphanumeric())
+            {
                 continue;
             }
             *entry.entry(s).or_insert(0) += 1;
@@ -111,8 +110,7 @@ mod tests {
             ("A", "中国是中国"),
             ("B", "美国美国日本"),
         ];
-        let sw: std::collections::HashSet<String> =
-            ["是".to_string()].into_iter().collect();
+        let sw: std::collections::HashSet<String> = ["是".to_string()].into_iter().collect();
         let r = analyse_freq_words(&items, &sw, 3);
         let a = r.get("A").unwrap();
         assert_eq!(a[0].0, "中");

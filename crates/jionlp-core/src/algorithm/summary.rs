@@ -54,7 +54,11 @@ pub fn extract_summary(text: &str, top_k: usize) -> Result<Vec<SummarySentence>>
     // Pick top-k by score descending, then re-sort by position to preserve
     // narrative order.
     let mut by_score = scored.clone();
-    by_score.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    by_score.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     by_score.truncate(top_k);
     by_score.sort_by_key(|s| s.position);
 
@@ -75,11 +79,7 @@ pub fn extract_summary(text: &str, top_k: usize) -> Result<Vec<SummarySentence>>
 /// Similarity between two sentences is the Jaccard similarity of their
 /// character bigram sets, which is cheap and doesn't require an embedding
 /// model.
-pub fn extract_summary_mmr(
-    text: &str,
-    top_k: usize,
-    lambda: f64,
-) -> Result<Vec<SummarySentence>> {
+pub fn extract_summary_mmr(text: &str, top_k: usize, lambda: f64) -> Result<Vec<SummarySentence>> {
     if text.is_empty() || top_k == 0 {
         return Ok(Vec::new());
     }
@@ -92,14 +92,9 @@ pub fn extract_summary_mmr(
     }
 
     // Precompute score and bigram set for each sentence.
-    let bigrams: Vec<rustc_hash::FxHashSet<String>> = sentences
-        .iter()
-        .map(|s| bigrams_of(s))
-        .collect();
-    let scores: Vec<f64> = sentences
-        .iter()
-        .map(|s| bigram_idf_score(s, idf))
-        .collect();
+    let bigrams: Vec<rustc_hash::FxHashSet<String>> =
+        sentences.iter().map(|s| bigrams_of(s)).collect();
+    let scores: Vec<f64> = sentences.iter().map(|s| bigram_idf_score(s, idf)).collect();
 
     // Greedy selection.
     let mut selected_idx: Vec<usize> = Vec::with_capacity(top_k);
@@ -147,10 +142,7 @@ fn bigrams_of(s: &str) -> rustc_hash::FxHashSet<String> {
     chars.windows(2).map(|w| w.iter().collect()).collect()
 }
 
-fn jaccard(
-    a: &rustc_hash::FxHashSet<String>,
-    b: &rustc_hash::FxHashSet<String>,
-) -> f64 {
+fn jaccard(a: &rustc_hash::FxHashSet<String>, b: &rustc_hash::FxHashSet<String>) -> f64 {
     if a.is_empty() && b.is_empty() {
         return 0.0;
     }
@@ -207,7 +199,8 @@ mod tests {
     #[test]
     fn extracts_top_k() {
         ensure_init();
-        let text = "北京是中国的首都。上海是金融中心。广州是南方大都市。深圳是科技之都。成都是西南枢纽。";
+        let text =
+            "北京是中国的首都。上海是金融中心。广州是南方大都市。深圳是科技之都。成都是西南枢纽。";
         let out = extract_summary(text, 2).unwrap();
         assert_eq!(out.len(), 2);
     }
@@ -239,7 +232,8 @@ mod tests {
     #[test]
     fn mmr_returns_top_k() {
         ensure_init();
-        let text = "北京是中国的首都。上海是金融中心。广州是南方大都市。深圳是科技之都。成都是西南枢纽。";
+        let text =
+            "北京是中国的首都。上海是金融中心。广州是南方大都市。深圳是科技之都。成都是西南枢纽。";
         let r = extract_summary_mmr(text, 2, 0.7).unwrap();
         assert_eq!(r.len(), 2);
     }

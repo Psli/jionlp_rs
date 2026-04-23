@@ -665,8 +665,7 @@ fn parse_time_with_ref(text: String, reference_iso: String) -> NifResult<Option<
         }
     }
     Err(rustler::Error::Term(Box::new(
-        "reference_iso must be 'YYYY-MM-DDTHH:MM:SS' or 'YYYY-MM-DD HH:MM:SS'"
-            .to_string(),
+        "reference_iso must be 'YYYY-MM-DDTHH:MM:SS' or 'YYYY-MM-DD HH:MM:SS'".to_string(),
     )))
 }
 
@@ -722,8 +721,7 @@ fn extract_keyphrase_textrank(
 
 #[rustler::nif]
 fn sentiment_score(text: String) -> NifResult<f64> {
-    core::sentiment_score(&text)
-        .map_err(|e| rustler::Error::Term(Box::new(format!("{e}"))))
+    core::sentiment_score(&text).map_err(|e| rustler::Error::Term(Box::new(format!("{e}"))))
 }
 
 #[rustler::nif]
@@ -741,7 +739,9 @@ fn swap_char_position(
     seed: u64,
     scale: f64,
 ) -> NifResult<Vec<String>> {
-    Ok(core::swap_char_position(&text, n as usize, swap_ratio, seed, scale))
+    Ok(core::swap_char_position(
+        &text, n as usize, swap_ratio, seed, scale,
+    ))
 }
 
 #[rustler::nif]
@@ -803,8 +803,7 @@ fn recognize_entities(
     text: String,
     lexicon: Vec<(String, Vec<String>)>,
 ) -> NifResult<Vec<NifNerEntity>> {
-    let ner = core::LexiconNer::new(lexicon)
-        .map_err(|e| rustler::Error::Term(Box::new(e)))?;
+    let ner = core::LexiconNer::new(lexicon).map_err(|e| rustler::Error::Term(Box::new(e)))?;
     Ok(ner.recognize(&text).into_iter().map(Into::into).collect())
 }
 
@@ -921,11 +920,7 @@ fn get_china_province_alias(name: String) -> Option<String> {
 }
 
 #[rustler::nif]
-fn get_china_city_alias(
-    name: String,
-    dismiss_diqu: bool,
-    dismiss_meng: bool,
-) -> Option<String> {
+fn get_china_city_alias(name: String, dismiss_diqu: bool, dismiss_meng: bool) -> Option<String> {
     core::get_china_city_alias(&name, dismiss_diqu, dismiss_meng)
 }
 

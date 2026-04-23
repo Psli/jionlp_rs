@@ -11,10 +11,7 @@ use crate::trie::LabeledTrie;
 
 /// Correct a CWS sample: if a `standard_words` entry appears in the raw
 /// concatenated text, force that span to be a single word.
-pub fn correct_cws_sample(
-    word_list: &[String],
-    standard_words: &[String],
-) -> Vec<String> {
+pub fn correct_cws_sample(word_list: &[String], standard_words: &[String]) -> Vec<String> {
     let mut trie: LabeledTrie<()> = LabeledTrie::new();
     for w in standard_words {
         trie.insert(w, ());
@@ -98,7 +95,9 @@ mod tests {
     fn cws_correction_merges_standard_word() {
         // Input: ["学习", "区", "块链", "。"], standard 区块链 should merge.
         let words: Vec<String> = ["学习", "区", "块链", "。"]
-            .iter().map(|s| s.to_string()).collect();
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let standards: Vec<String> = ["区块链".to_string(), "有条不紊".to_string()].to_vec();
         let out = correct_cws_sample(&words, &standards);
         assert!(out.contains(&"区块链".to_string()), "got {:?}", out);

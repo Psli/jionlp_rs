@@ -29,7 +29,11 @@ pub fn mine_rules(
     entities: &[Vec<(String, usize, usize)>],
     context_len: usize,
 ) -> FxHashMap<String, LabelRules> {
-    assert_eq!(texts.len(), entities.len(), "texts/entities length mismatch");
+    assert_eq!(
+        texts.len(),
+        entities.len(),
+        "texts/entities length mismatch"
+    );
     let mut out: FxHashMap<String, LabelRules> = FxHashMap::default();
     for (text, ents) in texts.iter().zip(entities.iter()) {
         let chars: Vec<char> = text.chars().collect();
@@ -63,11 +67,7 @@ mod tests {
 
     #[test]
     fn discovers_repeating_prefix_suffix() {
-        let texts = vec![
-            "公司名: 百度",
-            "公司名: 腾讯",
-            "公司名: 阿里",
-        ];
+        let texts = vec!["公司名: 百度", "公司名: 腾讯", "公司名: 阿里"];
         let entities = vec![
             vec![("Company".to_string(), 5, 7)], // 百度
             vec![("Company".to_string(), 5, 7)], // 腾讯

@@ -63,21 +63,21 @@ pub fn word2char(word_entities: &[Entity], word_tokens: &[String]) -> Vec<Entity
 /// The 100-surnames list (百家姓) — single-char surnames. Extended set can
 /// be supplied by the caller via `CheckPersonName::with_surnames`.
 const COMMON_SURNAMES: &[&str] = &[
-    "赵","钱","孙","李","周","吴","郑","王","冯","陈","褚","卫","蒋","沈","韩","杨",
-    "朱","秦","尤","许","何","吕","施","张","孔","曹","严","华","金","魏","陶","姜",
-    "戚","谢","邹","喻","柏","水","窦","章","云","苏","潘","葛","奚","范","彭","郎",
-    "鲁","韦","昌","马","苗","凤","花","方","俞","任","袁","柳","酆","鲍","史","唐",
-    "费","廉","岑","薛","雷","贺","倪","汤","滕","殷","罗","毕","郝","邬","安","常",
-    "乐","于","时","傅","皮","卞","齐","康","伍","余","元","卜","顾","孟","平","黄",
-    "和","穆","萧","尹","姚","邵","湛","汪","祁","毛","禹","狄","米","贝","明","臧",
-    "计","伏","成","戴","谈","宋","茅","庞","熊","纪","舒","屈","项","祝","董","梁",
-    "杜","阮","蓝","闵","席","季",
+    "赵", "钱", "孙", "李", "周", "吴", "郑", "王", "冯", "陈", "褚", "卫", "蒋", "沈", "韩", "杨",
+    "朱", "秦", "尤", "许", "何", "吕", "施", "张", "孔", "曹", "严", "华", "金", "魏", "陶", "姜",
+    "戚", "谢", "邹", "喻", "柏", "水", "窦", "章", "云", "苏", "潘", "葛", "奚", "范", "彭", "郎",
+    "鲁", "韦", "昌", "马", "苗", "凤", "花", "方", "俞", "任", "袁", "柳", "酆", "鲍", "史", "唐",
+    "费", "廉", "岑", "薛", "雷", "贺", "倪", "汤", "滕", "殷", "罗", "毕", "郝", "邬", "安", "常",
+    "乐", "于", "时", "傅", "皮", "卞", "齐", "康", "伍", "余", "元", "卜", "顾", "孟", "平", "黄",
+    "和", "穆", "萧", "尹", "姚", "邵", "湛", "汪", "祁", "毛", "禹", "狄", "米", "贝", "明", "臧",
+    "计", "伏", "成", "戴", "谈", "宋", "茅", "庞", "熊", "纪", "舒", "屈", "项", "祝", "董", "梁",
+    "杜", "阮", "蓝", "闵", "席", "季",
 ];
 
 /// Two-char compound surnames, common enough to ignore the trailing char.
 const DOUBLE_SURNAMES: &[&str] = &[
-    "欧阳", "司马", "诸葛", "上官", "尉迟", "公孙", "皇甫", "慕容",
-    "令狐", "夏侯", "轩辕", "东方", "宇文", "澹台",
+    "欧阳", "司马", "诸葛", "上官", "尉迟", "公孙", "皇甫", "慕容", "令狐", "夏侯", "轩辕", "东方",
+    "宇文", "澹台",
 ];
 
 /// Check whether `text` looks like a Chinese person name.
@@ -118,12 +118,9 @@ pub struct NerDatasetAnalysis {
 }
 
 /// Summarize a sample dataset of `(tokens, entities)` pairs.
-pub fn analyse_ner_dataset<T: AsRef<[Entity]>>(
-    samples: &[T],
-) -> NerDatasetAnalysis {
+pub fn analyse_ner_dataset<T: AsRef<[Entity]>>(samples: &[T]) -> NerDatasetAnalysis {
     let total_samples = samples.len();
-    let mut per_type: rustc_hash::FxHashMap<String, usize> =
-        rustc_hash::FxHashMap::default();
+    let mut per_type: rustc_hash::FxHashMap<String, usize> = rustc_hash::FxHashMap::default();
     let mut total_entities = 0usize;
     for ents in samples {
         for e in ents.as_ref() {
@@ -211,12 +208,24 @@ mod tests {
     #[test]
     fn char2word_roundtrip() {
         let words = vec![
-            "胡静静".to_string(), "喜欢".to_string(), "江西".to_string(),
-            "红叶".to_string(), "建筑".to_string(), "公司".to_string(),
+            "胡静静".to_string(),
+            "喜欢".to_string(),
+            "江西".to_string(),
+            "红叶".to_string(),
+            "建筑".to_string(),
+            "公司".to_string(),
         ];
         let char_ents = vec![
-            Entity { text: "胡静静".into(), type_: "Person".into(), offset: (0, 3) },
-            Entity { text: "江西红叶建筑公司".into(), type_: "Company".into(), offset: (5, 13) },
+            Entity {
+                text: "胡静静".into(),
+                type_: "Person".into(),
+                offset: (0, 3),
+            },
+            Entity {
+                text: "江西红叶建筑公司".into(),
+                type_: "Company".into(),
+                offset: (5, 13),
+            },
         ];
         let word_ents = char2word(&char_ents, &words);
         assert_eq!(word_ents.len(), 2);
@@ -246,12 +255,22 @@ mod tests {
     fn analyse_ner_dataset_basic() {
         let samples: Vec<Vec<Entity>> = vec![
             vec![
-                Entity { text: "A".into(), type_: "Person".into(), offset: (0, 1) },
-                Entity { text: "B".into(), type_: "Org".into(), offset: (2, 3) },
+                Entity {
+                    text: "A".into(),
+                    type_: "Person".into(),
+                    offset: (0, 1),
+                },
+                Entity {
+                    text: "B".into(),
+                    type_: "Org".into(),
+                    offset: (2, 3),
+                },
             ],
-            vec![
-                Entity { text: "C".into(), type_: "Person".into(), offset: (0, 1) },
-            ],
+            vec![Entity {
+                text: "C".into(),
+                type_: "Person".into(),
+                offset: (0, 1),
+            }],
         ];
         let r = analyse_ner_dataset(&samples);
         assert_eq!(r.total_samples, 2);
@@ -276,7 +295,7 @@ mod tests {
 
     #[test]
     fn token_batch_bucket_chunks() {
-        let r = token_batch_bucket(&vec![1, 2, 3, 4, 5], 2);
+        let r = token_batch_bucket(&[1, 2, 3, 4, 5], 2);
         assert_eq!(r, vec![vec![1, 2], vec![3, 4], vec![5]]);
     }
 }

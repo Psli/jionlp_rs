@@ -32,8 +32,7 @@ static WORLD_LOCATION: OnceCell<Vec<WorldLocationRecord>> = OnceCell::new();
 static QUANTIFIERS: OnceCell<FxHashMap<String, (u64, f64)>> = OnceCell::new();
 static PORNOGRAPHY: OnceCell<FxHashSet<String>> = OnceCell::new();
 static CHINESE_WORD_DICT: OnceCell<FxHashMap<String, String>> = OnceCell::new();
-static TOWN_VILLAGE: OnceCell<FxHashMap<String, FxHashMap<String, Vec<String>>>> =
-    OnceCell::new();
+static TOWN_VILLAGE: OnceCell<FxHashMap<String, FxHashMap<String, Vec<String>>>> = OnceCell::new();
 static CHAR_DICT: OnceCell<FxHashMap<char, CharInfo>> = OnceCell::new();
 static PHONE_LOCATION: OnceCell<PhoneLocationDict> = OnceCell::new();
 static TELECOM_OPERATOR: OnceCell<FxHashMap<String, String>> = OnceCell::new();
@@ -246,10 +245,7 @@ pub fn china_location() -> Result<&'static ChinaLocation> {
 /// Returns `{word → gloss}`.
 pub fn chinese_word_dictionary() -> Result<&'static FxHashMap<String, String>> {
     CHINESE_WORD_DICT.get_or_try_init(|| {
-        let text = read_zip_entry(
-            "chinese_word_dictionary.zip",
-            "chinese_word_dictionary.txt",
-        )?;
+        let text = read_zip_entry("chinese_word_dictionary.zip", "chinese_word_dictionary.txt")?;
         let mut out: FxHashMap<String, String> = FxHashMap::default();
         for raw in text.lines() {
             let raw = raw.trim_end();
@@ -272,13 +268,10 @@ pub fn chinese_word_dictionary() -> Result<&'static FxHashMap<String, String>> {
 ///
 /// Used by `parse_location_full(..., town_village=true)` to resolve 镇/村
 /// names within a matched admin triple.
-pub fn town_village_map()
-    -> Result<&'static FxHashMap<String, FxHashMap<String, Vec<String>>>>
-{
+pub fn town_village_map() -> Result<&'static FxHashMap<String, FxHashMap<String, Vec<String>>>> {
     TOWN_VILLAGE.get_or_try_init(|| {
         let text = read_zip_entry("china_location.zip", "china_location.txt")?;
-        let mut out: FxHashMap<String, FxHashMap<String, Vec<String>>> =
-            FxHashMap::default();
+        let mut out: FxHashMap<String, FxHashMap<String, Vec<String>>> = FxHashMap::default();
         let mut cur_prov = String::new();
         let mut cur_city = String::new();
         let mut cur_county = String::new();
@@ -294,9 +287,21 @@ pub fn town_village_map()
                 continue;
             }
             match level {
-                0 => { cur_prov = name; cur_city.clear(); cur_county.clear(); cur_town.clear(); }
-                1 => { cur_city = name; cur_county.clear(); cur_town.clear(); }
-                2 => { cur_county = name; cur_town.clear(); }
+                0 => {
+                    cur_prov = name;
+                    cur_city.clear();
+                    cur_county.clear();
+                    cur_town.clear();
+                }
+                1 => {
+                    cur_city = name;
+                    cur_county.clear();
+                    cur_town.clear();
+                }
+                2 => {
+                    cur_county = name;
+                    cur_town.clear();
+                }
                 3 => {
                     cur_town = name.clone();
                     let key = format!("{}{}{}", cur_prov, cur_city, cur_county);
@@ -408,7 +413,11 @@ pub fn world_location() -> Result<&'static [WorldLocationRecord]> {
                 }
                 let country = parts[0].to_string();
                 let full_name = parts.get(1).copied().unwrap_or("").to_string();
-                let capital = parts.get(2).copied().filter(|s| !s.is_empty()).map(String::from);
+                let capital = parts
+                    .get(2)
+                    .copied()
+                    .filter(|s| !s.is_empty())
+                    .map(String::from);
                 let cities = parts
                     .get(3)
                     .copied()
@@ -502,11 +511,7 @@ pub fn china_location_changes() -> Result<&'static [LocationChange]> {
                             (Some(o[4].to_string()), Some(o[5].to_string())),
                             (None, None),
                         ],
-                        new_loc: (
-                            Some(n[0].to_string()),
-                            Some(n[1].to_string()),
-                            None,
-                        ),
+                        new_loc: (Some(n[0].to_string()), Some(n[1].to_string()), None),
                     });
                 }
             }
@@ -591,9 +596,8 @@ fn parse_china_location_text(text: &str) -> ChinaLocation {
 fn extract_pinyin_list(tail: &str) -> Vec<String> {
     use once_cell::sync::Lazy;
     use regex::Regex;
-    static PY: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"\[([a-zàáāǎòóōǒèéēěìíīǐùúūǔǜǘǖǚǹńňüḿ]{1,8})\]").unwrap()
-    });
+    static PY: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\[([a-zàáāǎòóōǒèéēěìíīǐùúūǔǜǘǖǚǹńňüḿ]{1,8})\]").unwrap());
     let mut seen: FxHashSet<String> = FxHashSet::default();
     let mut out: Vec<String> = Vec::new();
     for cap in PY.captures_iter(tail) {
@@ -671,16 +675,10 @@ fn parse_phone_location_text(text: &str) -> PhoneLocationDict {
                         Err(_) => continue,
                     };
                     for n in s..=e {
-                        cell_prefix.insert(
-                            format!("{}{:04}", first3, n),
-                            cur_location.clone(),
-                        );
+                        cell_prefix.insert(format!("{}{:04}", first3, n), cur_location.clone());
                     }
                 } else if !part.is_empty() {
-                    cell_prefix.insert(
-                        format!("{}{}", first3, part),
-                        cur_location.clone(),
-                    );
+                    cell_prefix.insert(format!("{}{}", first3, part), cur_location.clone());
                 }
             }
         } else {
@@ -823,10 +821,7 @@ pub fn idf() -> Result<&'static FxHashMap<String, f64>> {
 /// dropped to keep the map compact.
 pub fn char_dictionary() -> Result<&'static FxHashMap<char, CharInfo>> {
     CHAR_DICT.get_or_try_init(|| {
-        let text = read_zip_entry(
-            "chinese_char_dictionary.zip",
-            "chinese_char_dictionary.txt",
-        )?;
+        let text = read_zip_entry("chinese_char_dictionary.zip", "chinese_char_dictionary.txt")?;
         let mut map: FxHashMap<char, CharInfo> = FxHashMap::default();
         for raw in text.lines() {
             if raw.is_empty() {
@@ -880,7 +875,11 @@ mod tests {
     fn loads_stopwords() {
         ensure_init();
         let sw = stopwords().unwrap();
-        assert!(sw.len() > 100, "stopwords should be non-trivial, got {}", sw.len());
+        assert!(
+            sw.len() > 100,
+            "stopwords should be non-trivial, got {}",
+            sw.len()
+        );
     }
 
     #[test]
@@ -934,8 +933,16 @@ mod tests {
         ensure_init();
         let pl = phone_location().unwrap();
         // Tens of thousands of 7-digit cell prefixes.
-        assert!(pl.cell_prefix.len() > 10_000, "cell prefixes = {}", pl.cell_prefix.len());
-        assert!(pl.area_code.len() > 300, "area codes = {}", pl.area_code.len());
+        assert!(
+            pl.cell_prefix.len() > 10_000,
+            "cell prefixes = {}",
+            pl.cell_prefix.len()
+        );
+        assert!(
+            pl.area_code.len() > 300,
+            "area codes = {}",
+            pl.area_code.len()
+        );
         // Area code 010 → 北京/北京.
         assert!(pl.area_code.get("010").unwrap().contains("北京"));
     }

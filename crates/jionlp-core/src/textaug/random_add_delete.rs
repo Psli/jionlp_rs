@@ -17,11 +17,10 @@ use crate::textaug::prng::SplitMix64;
 /// mirrors the spirit of Python's smoothed non-CJK distribution: mostly
 /// whitespace and punctuation that a reader would skim over.
 const NOISE_CHARS: &[char] = &[
-    ' ', ' ', ' ', // ASCII space weighted higher
-    '\u{3000}',    // fullwidth space
-    ',', '.', '/', '-', '_', '·',
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-    'a', 'e', 'i', 'o', 'u',
+    ' ', ' ', ' ',        // ASCII space weighted higher
+    '\u{3000}', // fullwidth space
+    ',', '.', '/', '-', '_', '·', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'e', 'i',
+    'o', 'u',
 ];
 
 pub fn random_add_delete(
@@ -42,9 +41,7 @@ pub fn random_add_delete(
     let char_count = text.chars().count();
 
     // Cap attempts so pathologically-low ratios don't loop forever.
-    let cap = (n as f64 / (add + del).max(1e-6))
-        .min((char_count * 2 + 4) as f64) as usize
-        + n;
+    let cap = (n as f64 / (add + del).max(1e-6)).min((char_count * 2 + 4) as f64) as usize + n;
 
     let mut attempts = 0usize;
     while out.len() < n && attempts < cap {

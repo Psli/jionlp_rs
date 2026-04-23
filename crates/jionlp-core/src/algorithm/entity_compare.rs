@@ -135,10 +135,7 @@ mod tests {
     fn boundary_diff_surfaces() {
         let text = "张三在西藏拉萨游玩！之后去新疆。";
         // Per-char offsets (char index, NOT byte).
-        let labeled = vec![
-            e("张三", "Person", 0, 2),
-            e("西藏拉萨", "Location", 3, 7),
-        ];
+        let labeled = vec![e("张三", "Person", 0, 2), e("西藏拉萨", "Location", 3, 7)];
         let predicted = vec![
             e("张三在", "Person", 0, 3),
             e("西藏拉萨", "Location", 3, 7),
@@ -158,10 +155,7 @@ mod tests {
     #[test]
     fn perfect_match_no_diff() {
         let text = "李四喜欢北京";
-        let labeled = vec![
-            e("李四", "Person", 0, 2),
-            e("北京", "Location", 4, 6),
-        ];
+        let labeled = vec![e("李四", "Person", 0, 2), e("北京", "Location", 4, 6)];
         let predicted = labeled.clone();
         let diffs = entity_compare_detailed(text, &labeled, &predicted, 2);
         assert!(diffs.is_empty());

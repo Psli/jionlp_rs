@@ -15,8 +15,8 @@
 //! no Rust counterpart yet — it's a boundary-sanity heuristic and can be
 //! added later without shape changes.
 
-use crate::gadget::time_parser::{parse_time_with_ref, TimeInfo};
 use crate::gadget::money_parser::{parse_money, MoneyInfo};
+use crate::gadget::time_parser::{parse_time_with_ref, TimeInfo};
 use chrono::NaiveDateTime;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -62,18 +62,14 @@ static FAKE_END_CHARS: &[char] = &['到', '至', '－', '—', '-', '~', '～', 
 
 /// Strings that look time-ish but rarely mean time in practice. Python's
 /// `non_time_string_list` + common additions.
-const NON_TIME_STRINGS: &[&str] =
-    &["一点", "0时", "一日", "黎明", "十分", "百分", "万分"];
+const NON_TIME_STRINGS: &[&str] = &["一点", "0时", "一日", "黎明", "十分", "百分", "万分"];
 
 /// Character sets used by the boundary checks.
 #[allow(dead_code)]
-static NUM_PAT: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[０-９0-9一二三四五六七八九十百千万]").unwrap()
-});
-static FOUR_NUM_YEAR_PAT: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^\d{4}$").unwrap());
-static UNIT_PAT: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(多)?[万亿元]").unwrap());
+static NUM_PAT: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[０-９0-9一二三四五六七八九十百千万]").unwrap());
+static FOUR_NUM_YEAR_PAT: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d{4}$").unwrap());
+static UNIT_PAT: Lazy<Regex> = Lazy::new(|| Regex::new(r"(多)?[万亿元]").unwrap());
 
 const SINGLE_CHAR_TIMES: &[&str] = &["春", "夏", "秋", "冬"];
 
@@ -174,7 +170,7 @@ fn grid_search_time(
                 continue;
             }
             // Strip auxiliary chars that confuse the parser.
-            let cleaned = sub.replace('的', "").replace(' ', "");
+            let cleaned = sub.replace(['的', ' '], "");
             if cleaned.is_empty() {
                 continue;
             }
@@ -251,7 +247,10 @@ fn money_filter(sub: &str) -> bool {
     let first = chars[0];
     let last = chars[chars.len() - 1];
     // Leading punctuation / separator is never a valid money start.
-    if matches!(first, ',' | '，' | '-' | '—' | '~' | '～' | '.' | '(' | '（' | ')' | '）') {
+    if matches!(
+        first,
+        ',' | '，' | '-' | '—' | '~' | '～' | '.' | '(' | '（' | ')' | '）'
+    ) {
         return false;
     }
     // Trailing separator is never valid either.
@@ -262,11 +261,7 @@ fn money_filter(sub: &str) -> bool {
 }
 
 /// Extract money entities from free text, each parsed via `parse_money`.
-pub fn extract_money(
-    text: &str,
-    with_parsing: bool,
-    ret_all: bool,
-) -> Vec<MoneyEntity> {
+pub fn extract_money(text: &str, with_parsing: bool, ret_all: bool) -> Vec<MoneyEntity> {
     let mut out = Vec::new();
     for m in MONEY_CHAR_STRING.find_iter(text) {
         let candidate = m.as_str();
@@ -355,7 +350,9 @@ mod tests {
         // At least one entity in the expected vicinity.
         assert!(!r.is_empty());
         assert!(
-            names.iter().any(|n| n.contains("2021") || n.contains("9月") || n.contains("星期")),
+            names
+                .iter()
+                .any(|n| n.contains("2021") || n.contains("9月") || n.contains("星期")),
             "got {:?}",
             names
         );
@@ -373,8 +370,12 @@ mod tests {
         let text = "海航亏损7000万港元出售香港公寓。以2.6亿港元的价格出售";
         let r = extract_money(text, false, false);
         let texts: Vec<&str> = r.iter().map(|e| e.text.as_str()).collect();
-        assert!(texts.iter().any(|t| t.contains("7000万") || t.contains("港元")));
-        assert!(texts.iter().any(|t| t.contains("2.6亿") || t.contains("港元")));
+        assert!(texts
+            .iter()
+            .any(|t| t.contains("7000万") || t.contains("港元")));
+        assert!(texts
+            .iter()
+            .any(|t| t.contains("2.6亿") || t.contains("港元")));
     }
 
     #[test]

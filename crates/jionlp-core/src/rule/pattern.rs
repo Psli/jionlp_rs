@@ -46,8 +46,9 @@ pub static CELL_PHONE_PATTERN: Lazy<FancyRegex> = Lazy::new(|| {
 });
 
 /// Cell-phone without boundary checks (for validation).
-pub static CELL_PHONE_CHECK_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^((1[3-9][0-9]))([\- ])?\d{4}([\- ])?\d{4}$").expect("CELL_PHONE_CHECK"));
+pub static CELL_PHONE_CHECK_PATTERN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^((1[3-9][0-9]))([\- ])?\d{4}([\- ])?\d{4}$").expect("CELL_PHONE_CHECK")
+});
 
 /// Mainland Chinese landline.
 pub static LANDLINE_PHONE_PATTERN: Lazy<FancyRegex> = Lazy::new(|| {
@@ -59,9 +60,8 @@ pub static LANDLINE_PHONE_PATTERN: Lazy<FancyRegex> = Lazy::new(|| {
 
 /// Captures the area-code prefix of a landline number — `(0\d{2,3})` followed
 /// by a separator. Group 1 is the area code.
-pub static LANDLINE_PHONE_AREA_CODE_PATTERN: Lazy<FancyRegex> = Lazy::new(|| {
-    FancyRegex::new(r"(0\d{2,3})[\)） \u{2014}\-]").expect("LANDLINE_AREA")
-});
+pub static LANDLINE_PHONE_AREA_CODE_PATTERN: Lazy<FancyRegex> =
+    Lazy::new(|| FancyRegex::new(r"(0\d{2,3})[\)） \u{2014}\-]").expect("LANDLINE_AREA"));
 
 // ──────────────────────────────── ID card ────────────────────────────────────
 

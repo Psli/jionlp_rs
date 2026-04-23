@@ -48,9 +48,7 @@ pub fn homophone_substitution(
 
     let mut out: Vec<String> = Vec::with_capacity(n);
     let char_count = text.chars().count();
-    let cap = (n as f64 / sub.max(1e-6))
-        .min((char_count * 2 + 4) as f64) as usize
-        + n;
+    let cap = (n as f64 / sub.max(1e-6)).min((char_count * 2 + 4) as f64) as usize + n;
     let mut attempts = 0usize;
 
     while out.len() < n && attempts < cap {

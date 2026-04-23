@@ -32,11 +32,11 @@ fn parity_split_sentence_fine_from_docstring() {
     //   text = '中华古汉语，泱泱大国，历史传承的瑰宝。'
     //   jio.split_sentence(text, criterion='fine')
     //   → ['中华古汉语，', '泱泱大国，', '历史传承的瑰宝。']
-    let got = jio::split_sentence("中华古汉语，泱泱大国，历史传承的瑰宝。", jio::Criterion::Fine);
-    assert_eq!(
-        got,
-        vec!["中华古汉语，", "泱泱大国，", "历史传承的瑰宝。"]
+    let got = jio::split_sentence(
+        "中华古汉语，泱泱大国，历史传承的瑰宝。",
+        jio::Criterion::Fine,
     );
+    assert_eq!(got, vec!["中华古汉语，", "泱泱大国，", "历史传承的瑰宝。"]);
 }
 
 #[test]
@@ -229,7 +229,10 @@ fn parity_parse_time_relative_tomorrow() {
         .and_hms_opt(10, 30, 0)
         .unwrap();
     let t = jio::parse_time_with_ref("明天", now).unwrap();
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2024, 3, 16).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2024, 3, 16).unwrap()
+    );
 }
 
 #[test]
@@ -266,8 +269,14 @@ fn parity_parse_time_range() {
     // Python: '2024年3月5日到8日' → time_span 2024-03-05..2024-03-08
     let t = jio::parse_time("2024年3月5日到8日").unwrap();
     assert_eq!(t.time_type, "time_span");
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2024, 3, 5).unwrap());
-    assert_eq!(t.end.date(), chrono::NaiveDate::from_ymd_opt(2024, 3, 8).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2024, 3, 5).unwrap()
+    );
+    assert_eq!(
+        t.end.date(),
+        chrono::NaiveDate::from_ymd_opt(2024, 3, 8).unwrap()
+    );
 }
 
 #[test]
@@ -426,7 +435,10 @@ fn parity_ts_word_mode_idiom() {
 
 #[test]
 fn parity_parse_time_timespan() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("下午3点到5点", now).unwrap();
     use chrono::Timelike;
     assert_eq!(t.time_type, "time_span");
@@ -436,9 +448,15 @@ fn parity_parse_time_timespan() {
 
 #[test]
 fn parity_parse_time_recurring_weekday() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("每周一", now).unwrap();
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2024, 3, 18).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2024, 3, 18).unwrap()
+    );
 }
 
 // ────────────────────────────── round 12 ──────────────────────────────────
@@ -448,14 +466,23 @@ fn parity_parse_time_recurring_weekday() {
 
 #[test]
 fn parity_parse_time_delta_days() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("三天后", now).unwrap();
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2024, 3, 18).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2024, 3, 18).unwrap()
+    );
 }
 
 #[test]
 fn parity_parse_time_delta_half_hour() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("半小时后", now).unwrap();
     use chrono::Timelike;
     assert_eq!(t.start.hour(), 11);
@@ -464,22 +491,37 @@ fn parity_parse_time_delta_half_hour() {
 
 #[test]
 fn parity_parse_time_delta_weeks_ago() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("两周前", now).unwrap();
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2024, 3, 1).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()
+    );
 }
 
 #[test]
 fn parity_parse_time_named_this_week() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("本周", now).unwrap();
     assert_eq!(t.time_type, "time_span");
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2024, 3, 11).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2024, 3, 11).unwrap()
+    );
 }
 
 #[test]
 fn parity_parse_time_named_last_month() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("上个月", now).unwrap();
     assert_eq!(t.start.date().month(), 2);
     use chrono::Datelike;
@@ -488,15 +530,27 @@ fn parity_parse_time_named_last_month() {
 
 #[test]
 fn parity_parse_time_named_next_quarter() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("下季度", now).unwrap();
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2024, 4, 1).unwrap());
-    assert_eq!(t.end.date(), chrono::NaiveDate::from_ymd_opt(2024, 6, 30).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2024, 4, 1).unwrap()
+    );
+    assert_eq!(
+        t.end.date(),
+        chrono::NaiveDate::from_ymd_opt(2024, 6, 30).unwrap()
+    );
 }
 
 #[test]
 fn parity_parse_time_named_last_year() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("去年", now).unwrap();
     use chrono::Datelike;
     assert_eq!(t.start.date().year(), 2023);
@@ -664,7 +718,10 @@ fn parity_bpe_control_byte_remap() {
 
 #[test]
 fn parity_parse_time_fuzzy_gangcai() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("刚才", now).unwrap();
     assert_eq!(t.definition, "blur");
     assert!(t.end <= now);
@@ -672,7 +729,10 @@ fn parity_parse_time_fuzzy_gangcai() {
 
 #[test]
 fn parity_parse_time_fuzzy_mashangjiu() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("马上", now).unwrap();
     assert_eq!(t.definition, "blur");
     assert!(t.end > now);
@@ -680,7 +740,10 @@ fn parity_parse_time_fuzzy_mashangjiu() {
 
 #[test]
 fn parity_parse_time_fuzzy_longest_match() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     // "不久之前" (4 chars) should win over "不久" or "不久前" (2-3 chars).
     let t = jio::parse_time_with_ref("不久之前", now).unwrap();
     assert_eq!(t.definition, "blur");
@@ -817,32 +880,50 @@ fn parity_simhash_similarity_self_is_one() {
 #[test]
 fn parity_lunar_spring_festival_2024() {
     let t = jio::parse_time("2024年春节").unwrap();
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2024, 2, 10).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2024, 2, 10).unwrap()
+    );
 }
 
 #[test]
 fn parity_lunar_mid_autumn_alias() {
     // "中秋" (without 节) should still resolve.
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(0, 0, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("中秋", now).unwrap();
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2024, 9, 17).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2024, 9, 17).unwrap()
+    );
 }
 
 #[test]
 fn parity_lunar_new_year_eve() {
     let t = jio::parse_time("2025年除夕").unwrap();
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2025, 1, 28).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2025, 1, 28).unwrap()
+    );
 }
 
 #[test]
 fn parity_lunar_dragon_boat_2023() {
     let t = jio::parse_time("2023年端午节").unwrap();
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2023, 6, 22).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2023, 6, 22).unwrap()
+    );
 }
 
 #[test]
 fn parity_lunar_chongyang_with_clock() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(0, 0, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
     let t = jio::parse_time_with_ref("重阳节上午10点", now).unwrap();
     use chrono::Timelike;
     assert_eq!(t.start.hour(), 10);
@@ -880,7 +961,10 @@ fn parity_chinese_numeral_year_lingsan() {
 #[test]
 fn parity_clock_banxiao() {
     // "8点半" = 08:30
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(0, 0, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
     use chrono::Timelike;
     let t = jio::parse_time_with_ref("8点半", now).unwrap();
     assert_eq!(t.start.hour(), 8);
@@ -892,7 +976,10 @@ fn parity_user_regression_lingsan_yuanxiao() {
     // User-reported example: 零三年元宵节晚上8点半 → 2003-02-15 20:30:00
     use chrono::Timelike;
     let t = jio::parse_time("零三年元宵节晚上8点半").unwrap();
-    assert_eq!(t.start.date(), chrono::NaiveDate::from_ymd_opt(2003, 2, 15).unwrap());
+    assert_eq!(
+        t.start.date(),
+        chrono::NaiveDate::from_ymd_opt(2003, 2, 15).unwrap()
+    );
     assert_eq!(t.start.hour(), 20);
     assert_eq!(t.start.minute(), 30);
 }
@@ -908,10 +995,7 @@ fn parity_textrank_nonempty() {
 #[test]
 fn parity_textrank_sorted_descending() {
     ensure_init();
-    let r = jio::extract_keyphrase_textrank(
-        "北京是中国首都。北京有名胜古迹。",
-        5, 2, 3,
-    ).unwrap();
+    let r = jio::extract_keyphrase_textrank("北京是中国首都。北京有名胜古迹。", 5, 2, 3).unwrap();
     for w in r.windows(2) {
         assert!(w[0].weight >= w[1].weight);
     }
@@ -920,16 +1004,32 @@ fn parity_textrank_sorted_descending() {
 #[test]
 fn parity_textrank_empty() {
     ensure_init();
-    assert!(jio::extract_keyphrase_textrank("", 5, 2, 3).unwrap().is_empty());
+    assert!(jio::extract_keyphrase_textrank("", 5, 2, 3)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
 fn parity_parse_time_fuzzy_entire_table() {
-    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(10, 30, 0).unwrap();
+    let now = chrono::NaiveDate::from_ymd_opt(2024, 3, 15)
+        .unwrap()
+        .and_hms_opt(10, 30, 0)
+        .unwrap();
     // Every fuzzy keyword the parser recognizes should return Some(blur).
     for kw in [
-        "刚才", "刚刚", "不久前", "最近", "近期", "晚些时候", "马上", "立刻",
-        "稍后", "即将", "过一会儿", "一会儿", "等会儿",
+        "刚才",
+        "刚刚",
+        "不久前",
+        "最近",
+        "近期",
+        "晚些时候",
+        "马上",
+        "立刻",
+        "稍后",
+        "即将",
+        "过一会儿",
+        "一会儿",
+        "等会儿",
     ] {
         let t = jio::parse_time_with_ref(kw, now)
             .unwrap_or_else(|| panic!("parser returned None for '{kw}'"));
@@ -990,8 +1090,7 @@ fn parity_check_all_chinese_char_rejects_mixed() {
 #[test]
 fn parity_lexicon_ner_leftmost_longest() {
     // LexiconNer with 北京 + 北京大学 → leftmost-longest picks 北京大学.
-    let mut lex: rustc_hash::FxHashMap<String, Vec<String>> =
-        rustc_hash::FxHashMap::default();
+    let mut lex: rustc_hash::FxHashMap<String, Vec<String>> = rustc_hash::FxHashMap::default();
     lex.insert(
         "Univ".to_string(),
         vec!["北京".to_string(), "北京大学".to_string()],
@@ -1608,7 +1707,10 @@ fn parity_parse_location_no_match_preserves_text() {
 fn parity_province_alias_full_names() {
     assert_eq!(jio::get_china_province_alias("山西省"), Some("山西"));
     assert_eq!(jio::get_china_province_alias("北京市"), Some("北京"));
-    assert_eq!(jio::get_china_province_alias("新疆维吾尔自治区"), Some("新疆"));
+    assert_eq!(
+        jio::get_china_province_alias("新疆维吾尔自治区"),
+        Some("新疆")
+    );
 }
 
 #[test]
@@ -1639,22 +1741,26 @@ fn parity_county_alias_qi() {
 
 #[test]
 fn parity_town_alias() {
-    assert_eq!(jio::get_china_town_alias("苏店镇"), Some("苏店".to_string()));
-    assert_eq!(jio::get_china_town_alias("鼓楼街道"), Some("鼓楼".to_string()));
+    assert_eq!(
+        jio::get_china_town_alias("苏店镇"),
+        Some("苏店".to_string())
+    );
+    assert_eq!(
+        jio::get_china_town_alias("鼓楼街道"),
+        Some("鼓楼".to_string())
+    );
 }
 
 #[test]
 fn parity_solar_to_lunar_roundtrip() {
     // 2024-02-10 = lunar 2024 / 1 / 1 (龙年春节).
     let (y, m, d, leap) =
-        jio::solar_to_lunar(chrono::NaiveDate::from_ymd_opt(2024, 2, 10).unwrap())
-            .unwrap();
+        jio::solar_to_lunar(chrono::NaiveDate::from_ymd_opt(2024, 2, 10).unwrap()).unwrap();
     assert_eq!((y, m, d, leap), (2024, 1, 1, false));
 
     // 2023-06-22 = lunar 2023 / 5 / 5 (端午节).
     let (y, m, d, leap) =
-        jio::solar_to_lunar(chrono::NaiveDate::from_ymd_opt(2023, 6, 22).unwrap())
-            .unwrap();
+        jio::solar_to_lunar(chrono::NaiveDate::from_ymd_opt(2023, 6, 22).unwrap()).unwrap();
     assert_eq!((y, m, d, leap), (2023, 5, 5, false));
 }
 
@@ -1853,7 +1959,9 @@ fn money_case(text: &str, num: f64, case: &str, def: &str) {
     assert!(
         (m.num - num).abs() < 1e-3,
         "num: got {} vs expected {} ({})",
-        m.num, num, text
+        m.num,
+        num,
+        text
     );
     assert_eq!(m.case, case, "case ({})", text);
     assert_eq!(m.definition, def, "definition ({})", text);
@@ -1939,23 +2047,24 @@ fn parity_money_consecutive_cn_digits() {
 // ───────────────────────── Round 36 — all 54 Python test_money_parser cases
 
 /// Assert helper with optional end_num.
-fn money_case_full(
-    input: &str,
-    lo: f64,
-    hi: Option<f64>,
-    case: &str,
-    def: &str,
-) {
-    let m = jio::parse_money(input)
-        .unwrap_or_else(|| panic!("parse_money({}) → None", input));
-    assert!((m.num - lo).abs() < 1e-3, "{} num: got {}, want {}", input, m.num, lo);
+fn money_case_full(input: &str, lo: f64, hi: Option<f64>, case: &str, def: &str) {
+    let m = jio::parse_money(input).unwrap_or_else(|| panic!("parse_money({}) → None", input));
+    assert!(
+        (m.num - lo).abs() < 1e-3,
+        "{} num: got {}, want {}",
+        input,
+        m.num,
+        lo
+    );
     match hi {
         Some(h) => {
             let got = m.end_num.unwrap_or(f64::NAN);
             assert!(
                 (got - h).abs() < 1e-3,
                 "{} end_num: got {:?}, want {}",
-                input, m.end_num, h
+                input,
+                m.end_num,
+                h
             );
         }
         None => assert_eq!(m.end_num, None, "{} end_num", input),
@@ -1969,13 +2078,15 @@ fn money_case_full(
 #[test]
 fn parity_extract_time_from_text() {
     ensure_init();
-    let now = chrono::NaiveDateTime::parse_from_str(
-        "2021-09-01T15:15:32", "%Y-%m-%dT%H:%M:%S").unwrap();
+    let now =
+        chrono::NaiveDateTime::parse_from_str("2021-09-01T15:15:32", "%Y-%m-%dT%H:%M:%S").unwrap();
     let text = "中秋、国庆两个假期已在眼前。2021年中秋节是9月21日，星期二。";
     let r = jio::extract_time(text, now, false, false);
     let texts: Vec<&str> = r.iter().map(|e| e.text.as_str()).collect();
     assert!(
-        texts.iter().any(|t| t.contains("2021") || t.contains("中秋") || t.contains("9月")),
+        texts
+            .iter()
+            .any(|t| t.contains("2021") || t.contains("中秋") || t.contains("9月")),
         "expected time entity, got {:?}",
         texts
     );
@@ -2004,14 +2115,32 @@ fn parity_money_all_54_from_python() {
         ("82，225.00元", 82225.00, None, "元", "accurate"),
         ("25481港元", 25481.00, None, "港元", "accurate"),
         ("45564.44美元", 45564.44, None, "美元", "accurate"),
-        ("233,333，333,434.344元", 233333333434.34, None, "元", "accurate"),
+        (
+            "233,333，333,434.344元",
+            233333333434.34,
+            None,
+            "元",
+            "accurate",
+        ),
         ("1.2万元", 12000.0, None, "元", "accurate"),
         ("3千万亿日元", 3e15, None, "日元", "accurate"),
-        ("新台币 177.1 亿元", 17710000000.0, None, "新台币", "accurate"),
+        (
+            "新台币 177.1 亿元",
+            17710000000.0,
+            None,
+            "新台币",
+            "accurate",
+        ),
         ("15k左右", 15000.0, None, "元", "blur"),
         ("30w上下", 300000.0, None, "元", "blur"),
         ("123元1角1分", 123.11, None, "元", "accurate"),
-        ("六十四万零一百四十三元一角七分", 640143.17, None, "元", "accurate"),
+        (
+            "六十四万零一百四十三元一角七分",
+            640143.17,
+            None,
+            "元",
+            "accurate",
+        ),
         ("壹万二千三百四十五元", 12345.0, None, "元", "accurate"),
         ("三百万", 3000000.0, None, "元", "accurate"),
         ("肆佰叁拾萬", 4300000.0, None, "元", "accurate"),
@@ -2032,8 +2161,20 @@ fn parity_money_all_54_from_python() {
         ("小于40万", 400000.0, None, "元", "blur-"),
         ("3000多欧元", 3000.0, Some(4000.0), "欧元", "blur"),
         ("几十万块", 100000.0, Some(1000000.0), "元", "blur"),
-        ("人民币数十亿元", 1000000000.0, Some(10000000000.0), "元", "blur"),
-        ("数十亿元人民币", 1000000000.0, Some(10000000000.0), "元", "blur"),
+        (
+            "人民币数十亿元",
+            1000000000.0,
+            Some(10000000000.0),
+            "元",
+            "blur",
+        ),
+        (
+            "数十亿元人民币",
+            1000000000.0,
+            Some(10000000000.0),
+            "元",
+            "blur",
+        ),
         ("十几块钱", 10.0, Some(20.0), "元", "blur"),
         ("大约十多欧元", 10.0, Some(20.0), "欧元", "blur"),
         ("从8500到3万港元", 8500.0, Some(30000.0), "港元", "blur"),
@@ -2045,11 +2186,41 @@ fn parity_money_all_54_from_python() {
         ("十八至三十万日元", 180000.0, Some(300000.0), "日元", "blur"),
         ("两到三仟澳元", 2000.0, Some(3000.0), "澳元", "blur"),
         ("两~3百日元", 200.0, Some(300.0), "日元", "blur"),
-        ("一百二十到一百五十万元", 1200000.0, Some(1500000.0), "元", "blur"),
-        ("一千到两千万元人民币", 10000000.0, Some(20000000.0), "元", "blur"),
-        ("七千到九千亿元", 700000000000.0, Some(900000000000.0), "元", "blur"),
-        ("八到九百亿泰铢", 800000000.0, Some(90000000000.0), "泰铢", "blur"),
-        ("八百到九百亿泰铢", 80000000000.0, Some(90000000000.0), "泰铢", "blur"),
+        (
+            "一百二十到一百五十万元",
+            1200000.0,
+            Some(1500000.0),
+            "元",
+            "blur",
+        ),
+        (
+            "一千到两千万元人民币",
+            10000000.0,
+            Some(20000000.0),
+            "元",
+            "blur",
+        ),
+        (
+            "七千到九千亿元",
+            700000000000.0,
+            Some(900000000000.0),
+            "元",
+            "blur",
+        ),
+        (
+            "八到九百亿泰铢",
+            800000000.0,
+            Some(90000000000.0),
+            "泰铢",
+            "blur",
+        ),
+        (
+            "八百到九百亿泰铢",
+            80000000000.0,
+            Some(90000000000.0),
+            "泰铢",
+            "blur",
+        ),
         ("八九亿韩元", 800000000.0, Some(900000000.0), "韩元", "blur"),
         ("三五百块", 300.0, Some(500.0), "元", "blur"),
         ("四五千块钱", 4000.0, Some(5000.0), "元", "blur"),
@@ -2307,12 +2478,8 @@ fn parity_location_town_village_matched() {
     ensure_init();
     // Python test case:
     //   云南省红河哈尼族彝族自治州元阳县黄茅岭乡 → town=黄茅岭乡
-    let r = jio::parse_location_full(
-        "云南省红河哈尼族彝族自治州元阳县黄茅岭乡",
-        true,
-        true,
-    )
-    .unwrap();
+    let r =
+        jio::parse_location_full("云南省红河哈尼族彝族自治州元阳县黄茅岭乡", true, true).unwrap();
     assert_eq!(r.province.as_deref(), Some("云南省"));
     assert_eq!(r.city.as_deref(), Some("红河哈尼族彝族自治州"));
     assert_eq!(r.county.as_deref(), Some("元阳县"));

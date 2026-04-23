@@ -68,7 +68,11 @@ fn index() -> Result<&'static SentimentIndex> {
             .build(&patterns)
             .map_err(|e| crate::Error::InvalidArg(format!("AC build (sentiment): {e}")))?;
 
-        Ok(SentimentIndex { ac, kinds, patterns })
+        Ok(SentimentIndex {
+            ac,
+            kinds,
+            patterns,
+        })
     })
 }
 

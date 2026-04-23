@@ -198,10 +198,29 @@ pub fn num2char(num: &str, style: NumStyle) -> Result<String, String> {
 static CHAR_TO_DIGIT: Lazy<FxHashMap<char, u64>> = Lazy::new(|| {
     let mut m = FxHashMap::default();
     for (ch, v) in [
-        ('零', 0u64), ('〇', 0), ('一', 1), ('壹', 1), ('二', 2), ('贰', 2), ('两', 2),
-        ('俩', 2), ('三', 3), ('叁', 3), ('仨', 3), ('四', 4), ('肆', 4), ('五', 5),
-        ('伍', 5), ('六', 6), ('陆', 6), ('七', 7), ('柒', 7), ('八', 8), ('捌', 8),
-        ('九', 9), ('玖', 9),
+        ('零', 0u64),
+        ('〇', 0),
+        ('一', 1),
+        ('壹', 1),
+        ('二', 2),
+        ('贰', 2),
+        ('两', 2),
+        ('俩', 2),
+        ('三', 3),
+        ('叁', 3),
+        ('仨', 3),
+        ('四', 4),
+        ('肆', 4),
+        ('五', 5),
+        ('伍', 5),
+        ('六', 6),
+        ('陆', 6),
+        ('七', 7),
+        ('柒', 7),
+        ('八', 8),
+        ('捌', 8),
+        ('九', 9),
+        ('玖', 9),
     ] {
         m.insert(ch, v);
     }
@@ -332,7 +351,10 @@ mod tests {
 
     #[test]
     fn num2char_simple_sim() {
-        assert_eq!(num2char("38009", NumStyle::Simplified).unwrap(), "三万八千零九");
+        assert_eq!(
+            num2char("38009", NumStyle::Simplified).unwrap(),
+            "三万八千零九"
+        );
     }
 
     #[test]
@@ -364,7 +386,10 @@ mod tests {
 
     #[test]
     fn num2char_strips_commas() {
-        assert_eq!(num2char("38,009", NumStyle::Simplified).unwrap(), "三万八千零九");
+        assert_eq!(
+            num2char("38,009", NumStyle::Simplified).unwrap(),
+            "三万八千零九"
+        );
     }
 
     // ── char2num ────────────────────────────────────────────────────────

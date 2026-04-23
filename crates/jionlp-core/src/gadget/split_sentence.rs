@@ -26,18 +26,16 @@ static PUNCS_COARSE: Lazy<FxHashSet<&'static str>> = Lazy::new(|| {
 
 static PUNCS_FINE: Lazy<FxHashSet<&'static str>> = Lazy::new(|| {
     [
-        "……", "\r\n", "，", "。", ";", "；", "…", "！", "!", "?", "？",
-        "\r", "\n", "“", "”", "‘", "’", "：",
+        "……", "\r\n", "，", "。", ";", "；", "…", "！", "!", "?", "？", "\r", "\n", "“", "”", "‘",
+        "’", "：",
     ]
     .into_iter()
     .collect()
 });
 
-static FRONT_QUOTES: Lazy<FxHashSet<&'static str>> =
-    Lazy::new(|| ["“", "‘"].into_iter().collect());
+static FRONT_QUOTES: Lazy<FxHashSet<&'static str>> = Lazy::new(|| ["“", "‘"].into_iter().collect());
 
-static BACK_QUOTES: Lazy<FxHashSet<&'static str>> =
-    Lazy::new(|| ["”", "’"].into_iter().collect());
+static BACK_QUOTES: Lazy<FxHashSet<&'static str>> = Lazy::new(|| ["”", "’"].into_iter().collect());
 
 /// Multi-char fine punctuation must be tried before single-char ones so that
 /// "……" doesn't get split as two "…". "\r\n" likewise.

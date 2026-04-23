@@ -197,14 +197,12 @@ impl<'a> TokenBatchBucket<'a> {
 
     pub fn call(&self, token_lists: Vec<Vec<String>>) -> Vec<Vec<String>> {
         // Sort by length, remember original positions.
-        let mut indexed: Vec<(usize, Vec<String>)> =
-            token_lists.into_iter().enumerate().collect();
+        let mut indexed: Vec<(usize, Vec<String>)> = token_lists.into_iter().enumerate().collect();
         indexed.sort_by_key(|(_, t)| t.len());
 
         let mut ordered_out: Vec<(usize, Vec<String>)> = Vec::with_capacity(indexed.len());
         for batch in indexed.chunks(self.batch_size) {
-            let batch_tokens: Vec<Vec<String>> =
-                batch.iter().map(|(_, t)| t.clone()).collect();
+            let batch_tokens: Vec<Vec<String>> = batch.iter().map(|(_, t)| t.clone()).collect();
             let batch_tags = (self.func)(batch_tokens);
             for ((orig_idx, _), tags) in batch.iter().zip(batch_tags.into_iter()) {
                 ordered_out.push((*orig_idx, tags));
@@ -251,7 +249,7 @@ mod tests {
 
     #[test]
     fn bucket_restores_order() {
-        let lengths = vec![5, 10, 3, 20, 7];
+        let lengths = [5, 10, 3, 20, 7];
         let input: Vec<Vec<String>> = lengths
             .iter()
             .map(|&n| (0..n).map(|i| format!("t{}", i)).collect())

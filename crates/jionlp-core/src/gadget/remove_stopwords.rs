@@ -90,7 +90,13 @@ mod tests {
         ensure_init();
         // 不 is both a stopword and a negative word — with flag it should stay.
         let input = vs(&["不", "是", "好"]);
-        let with = remove_stopwords(&input, RemoveOpts { save_negative_words: true }).unwrap();
+        let with = remove_stopwords(
+            &input,
+            RemoveOpts {
+                save_negative_words: true,
+            },
+        )
+        .unwrap();
         let without = remove_stopwords(&input, RemoveOpts::default()).unwrap();
         assert!(with.contains(&"不".to_string()));
         assert!(!without.contains(&"不".to_string()));

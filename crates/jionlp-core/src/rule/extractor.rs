@@ -104,9 +104,8 @@ pub fn extract_motor_vehicle_licence_plate(text: &str) -> Vec<Extracted> {
 /// Extract runs of Chinese characters.
 pub fn extract_chinese(text: &str) -> Vec<String> {
     // Lookaround-free; plain regex is faster.
-    static P: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(r"[\u{4E00}-\u{9FA5}]+").unwrap()
-    });
+    static P: once_cell::sync::Lazy<regex::Regex> =
+        once_cell::sync::Lazy::new(|| regex::Regex::new(r"[\u{4E00}-\u{9FA5}]+").unwrap());
     P.find_iter(text).map(|m| m.as_str().to_string()).collect()
 }
 
@@ -197,7 +196,11 @@ mod tests {
         // A structurally valid (made-up) ID card number.
         let r = extract_id_card("我的身份证是 11010519900307123X，请保密");
         assert_eq!(r.len(), 1);
-        assert!(r[0].text.ends_with("X") || r[0].text.ends_with("x") || r[0].text.chars().last().unwrap().is_ascii_digit());
+        assert!(
+            r[0].text.ends_with("X")
+                || r[0].text.ends_with("x")
+                || r[0].text.chars().last().unwrap().is_ascii_digit()
+        );
     }
 
     #[test]

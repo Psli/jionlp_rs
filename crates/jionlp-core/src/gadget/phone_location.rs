@@ -90,17 +90,14 @@ fn cell_phone_location_impl(text: &str, digits: &str) -> Result<PhoneInfo> {
     };
 
     let op_key_len = digits.len().min(3);
-    let operator = ops
-        .get(&digits[..op_key_len])
-        .cloned()
-        .or_else(|| {
-            // Fall back: try 4-digit carrier key if 3 fails (rare).
-            if digits.len() >= 4 {
-                ops.get(&digits[..4]).cloned()
-            } else {
-                None
-            }
-        });
+    let operator = ops.get(&digits[..op_key_len]).cloned().or_else(|| {
+        // Fall back: try 4-digit carrier key if 3 fails (rare).
+        if digits.len() >= 4 {
+            ops.get(&digits[..4]).cloned()
+        } else {
+            None
+        }
+    });
 
     Ok(PhoneInfo {
         number: text.to_string(),
@@ -145,14 +142,11 @@ fn landline_lookup(text: &str, area_code: &str) -> Result<PhoneInfo> {
 /// phone_location.txt and slash-separated in landline_phone_area_code.txt
 /// (e.g. "010 北京/北京"), so accept both.
 fn split_loc(s: &str) -> (Option<String>, Option<String>) {
-    let parts: Vec<&str> = s.split(|c: char| c == ' ' || c == '/').collect();
+    let parts: Vec<&str> = s.split([' ', '/']).collect();
     match parts.len() {
         0 => (None, None),
         1 => (Some(parts[0].to_string()), None),
-        _ => (
-            non_empty(parts[0]),
-            non_empty(parts[parts.len() - 1]),
-        ),
+        _ => (non_empty(parts[0]), non_empty(parts[parts.len() - 1])),
     }
 }
 
@@ -163,7 +157,6 @@ fn non_empty(s: &str) -> Option<String> {
         Some(s.to_string())
     }
 }
-
 
 #[cfg(test)]
 mod tests {

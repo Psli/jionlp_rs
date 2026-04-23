@@ -57,11 +57,7 @@ fn build_tables() -> ByteTables {
             n += 1;
         }
     }
-    let dec: FxHashMap<char, u8> = enc
-        .iter()
-        .enumerate()
-        .map(|(i, &c)| (c, i as u8))
-        .collect();
+    let dec: FxHashMap<char, u8> = enc.iter().enumerate().map(|(i, &c)| (c, i as u8)).collect();
     ByteTables { enc, dec }
 }
 

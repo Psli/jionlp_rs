@@ -61,10 +61,8 @@ pub fn remove_email(text: &str) -> String {
 /// Python's `remove_email(text, delete_prefix=True)` equivalent.
 pub fn remove_email_with_prefix(text: &str) -> String {
     static PREFIX: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(
-            r"(?i)(e(\-|—| |_)?mail|(电子)?邮[箱件])(地址)?[:：\t \u{3000}]*",
-        )
-        .unwrap()
+        regex::Regex::new(r"(?i)(e(\-|—| |_)?mail|(电子)?邮[箱件])(地址)?[:：\t \u{3000}]*")
+            .unwrap()
     });
     let cleaned = replace_via(&EMAIL_PATTERN, text, "");
     PREFIX.replace_all(&cleaned, "").to_string()
@@ -99,10 +97,8 @@ pub fn remove_phone_number(text: &str) -> String {
 /// Remove phone numbers + common prefix tokens (`电话:` / `tel:` / `手机号:` etc).
 pub fn remove_phone_number_with_prefix(text: &str) -> String {
     static PREFIX: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(
-            r"(?i)(手机(号码?)?|(固定)?电话|tel(ephone)?|phone)[:：\t \u{3000}]*",
-        )
-        .unwrap()
+        regex::Regex::new(r"(?i)(手机(号码?)?|(固定)?电话|tel(ephone)?|phone)[:：\t \u{3000}]*")
+            .unwrap()
     });
     let cleaned = remove_phone_number(text);
     PREFIX.replace_all(&cleaned, "").to_string()
@@ -143,9 +139,8 @@ pub fn replace_qq(text: &str, placeholder: &str) -> String {
 
 /// Replace every run of Chinese characters with `placeholder`.
 pub fn replace_chinese(text: &str, placeholder: &str) -> String {
-    static P: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(r"[\u{4E00}-\u{9FA5}]+").unwrap()
-    });
+    static P: once_cell::sync::Lazy<regex::Regex> =
+        once_cell::sync::Lazy::new(|| regex::Regex::new(r"[\u{4E00}-\u{9FA5}]+").unwrap());
     P.replace_all(text, placeholder).to_string()
 }
 
@@ -157,7 +152,13 @@ pub fn remove_parentheses(text: &str, table: Option<&str>) -> String {
     let chars: Vec<char> = table.chars().collect();
     let open_to_close: std::collections::HashMap<char, char> = chars
         .chunks(2)
-        .filter_map(|p| if p.len() == 2 { Some((p[0], p[1])) } else { None })
+        .filter_map(|p| {
+            if p.len() == 2 {
+                Some((p[0], p[1]))
+            } else {
+                None
+            }
+        })
         .collect();
     let opens: std::collections::HashSet<char> = open_to_close.keys().copied().collect();
     let closes: std::collections::HashSet<char> = open_to_close.values().copied().collect();
@@ -189,7 +190,8 @@ pub fn remove_parentheses(text: &str, table: Option<&str>) -> String {
 
 /// Replace every paired parenthesis span with `placeholder`.
 pub fn replace_parentheses(text: &str, placeholder: &str, table: Option<&str>) -> String {
-    let spans = crate::rule::extractor::extract_parentheses(text, table.unwrap_or(PARENTHESES_TABLE));
+    let spans =
+        crate::rule::extractor::extract_parentheses(text, table.unwrap_or(PARENTHESES_TABLE));
     if spans.is_empty() {
         return text.to_string();
     }
@@ -198,7 +200,11 @@ pub fn replace_parentheses(text: &str, placeholder: &str, table: Option<&str>) -
     sorted.sort_by_key(|e| e.offset.0);
     let mut kept: Vec<&crate::rule::extractor::Extracted> = Vec::new();
     for s in sorted {
-        if kept.last().map(|last| s.offset.0 < last.offset.1).unwrap_or(false) {
+        if kept
+            .last()
+            .map(|last| s.offset.0 < last.offset.1)
+            .unwrap_or(false)
+        {
             continue; // nested within the current outer span.
         }
         kept.push(s);
@@ -232,7 +238,7 @@ pub fn remove_exception_char(text: &str) -> String {
                 || ('\u{3000}'..='\u{303F}').contains(c)   // CJK punctuation
                 || ('\u{FF00}'..='\u{FFEF}').contains(c)   // fullwidth forms
                 || ('\u{2E80}'..='\u{2EFF}').contains(c)   // CJK radicals sup
-                || ('\u{2F00}'..='\u{2FDF}').contains(c)   // Kangxi radicals
+                || ('\u{2F00}'..='\u{2FDF}').contains(c) // Kangxi radicals
         })
         .collect()
 }
@@ -246,7 +252,7 @@ pub fn convert_full2half(text: &str) -> String {
                 ' '
             } else if (0xFF01..=0xFF5E).contains(&code) {
                 // ！..～ → !..~ (ASCII 0x21..0x7E)
-                let mapped = (code - 0xFEE0) as u32;
+                let mapped = code - 0xFEE0;
                 char::from_u32(mapped).unwrap_or(c)
             } else {
                 c
@@ -312,9 +318,8 @@ pub fn clean_text(
 /// Very loose WeChat ID extractor — 6-20 chars, starts with a letter,
 /// allowed charset `a-zA-Z0-9_-`. Emits unique matches in order.
 pub fn extract_wechat_id(text: &str) -> Vec<String> {
-    static P: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(r"(?i)\b[a-z][a-z0-9_-]{5,19}\b").unwrap()
-    });
+    static P: once_cell::sync::Lazy<regex::Regex> =
+        once_cell::sync::Lazy::new(|| regex::Regex::new(r"(?i)\b[a-z][a-z0-9_-]{5,19}\b").unwrap());
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut out = Vec::new();
     for m in P.find_iter(text) {

@@ -52,7 +52,11 @@ pub fn compute_f1(gold: &[Vec<String>], pred: &[Vec<String>]) -> F1Report {
     // 1. Collect unique labels.
     let mut label_set: std::collections::BTreeSet<String> = Default::default();
     for (g, p) in gold.iter().zip(pred.iter()) {
-        assert_eq!(g.len(), p.len(), "gold/pred tag length differs within sample");
+        assert_eq!(
+            g.len(),
+            p.len(),
+            "gold/pred tag length differs within sample"
+        );
         for tag in g.iter().chain(p.iter()) {
             label_set.insert(tag.clone());
         }
@@ -110,7 +114,11 @@ pub fn compute_f1(gold: &[Vec<String>], pred: &[Vec<String>]) -> F1Report {
             fn_total += fn_;
         }
     }
-    let macro_f1 = if macro_count == 0 { 0.0 } else { macro_sum / macro_count as f64 };
+    let macro_f1 = if macro_count == 0 {
+        0.0
+    } else {
+        macro_sum / macro_count as f64
+    };
     let micro_precision = if tp_total + fp_total == 0 {
         0.0
     } else {
@@ -154,7 +162,12 @@ impl F1Report {
     pub fn to_report_string(&self) -> String {
         let mut out = String::new();
         out.push_str("\n=== Confusion Matrix (gold → pred) ===\n");
-        let max_lbl = self.labels.iter().map(|s| s.chars().count()).max().unwrap_or(5);
+        let max_lbl = self
+            .labels
+            .iter()
+            .map(|s| s.chars().count())
+            .max()
+            .unwrap_or(5);
         let cell = (max_lbl + 2).max(6);
         out.push_str(&format!("{:width$}", "gold\\pred", width = cell));
         for l in &self.labels {

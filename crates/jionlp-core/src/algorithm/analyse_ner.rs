@@ -98,9 +98,7 @@ pub fn analyse_ner_dataset_split<X: Clone>(
         };
 
         // If any split's info-loss > 5% AND we still have retries, redo.
-        if let (Some((_, tr)), Some((_, vr)), Some((_, te))) =
-            (train_kl, valid_kl, test_kl)
-        {
+        if let (Some((_, tr)), Some((_, vr)), Some((_, te))) = (train_kl, valid_kl, test_kl) {
             if (tr > 0.05 || vr > 0.05 || te > 0.05) && attempt < 2 {
                 continue;
             }
@@ -146,7 +144,11 @@ fn stat_class(dataset_y: &[Vec<Entity>]) -> FxHashMap<String, ClassStat> {
                 k,
                 ClassStat {
                     count: v,
-                    proportion: if total == 0 { 0.0 } else { v as f64 / total as f64 },
+                    proportion: if total == 0 {
+                        0.0
+                    } else {
+                        v as f64 / total as f64
+                    },
                 },
             )
         })
@@ -155,10 +157,7 @@ fn stat_class(dataset_y: &[Vec<Entity>]) -> FxHashMap<String, ClassStat> {
 
 /// Compute KL(p || q) and normalize by p's entropy for an "info dismatch
 /// ratio" (matches Python convention). Both maps must have the same keys.
-fn kl_divergence(
-    p: &FxHashMap<String, ClassStat>,
-    q: &FxHashMap<String, ClassStat>,
-) -> (f64, f64) {
+fn kl_divergence(p: &FxHashMap<String, ClassStat>, q: &FxHashMap<String, ClassStat>) -> (f64, f64) {
     let mut kl = 0.0f64;
     let mut entropy = 0.0f64;
     for (k, ps) in p {
@@ -167,7 +166,11 @@ fn kl_divergence(
         kl += p1 * (p1 / q1).log2();
         entropy += p1 * (1.0 / p1).log2();
     }
-    let ratio = if entropy.abs() < 1e-12 { 0.0 } else { kl / entropy };
+    let ratio = if entropy.abs() < 1e-12 {
+        0.0
+    } else {
+        kl / entropy
+    };
     (kl, ratio)
 }
 
@@ -188,9 +191,7 @@ mod tests {
         // Build a tiny uniform dataset: 10 samples, alternating types.
         let x: Vec<String> = (0..100).map(|i| format!("sample{}", i)).collect();
         let y: Vec<Vec<Entity>> = (0..100)
-            .map(|i| {
-                vec![if i % 2 == 0 { e("A") } else { e("B") }]
-            })
+            .map(|i| vec![if i % 2 == 0 { e("A") } else { e("B") }])
             .collect();
         let r = analyse_ner_dataset_split(&x, &y, (0.8, 0.1, 0.1), 42, true);
         assert_eq!(r.train_x.len(), 80);

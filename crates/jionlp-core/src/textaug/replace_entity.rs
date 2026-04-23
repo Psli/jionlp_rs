@@ -50,9 +50,7 @@ pub fn replace_entity(
     let mut out: Vec<EntityAugmented> = Vec::with_capacity(n);
     // Cap attempts so we don't loop forever when the lexicon makes it hard
     // to generate distinct outputs.
-    let cap = (n as f64 / ratio.max(1e-6))
-        .min((entities.len() * 8 + 4) as f64) as usize
-        + n;
+    let cap = (n as f64 / ratio.max(1e-6)).min((entities.len() * 8 + 4) as f64) as usize + n;
     let mut attempts = 0usize;
 
     while out.len() < n && attempts < cap {
@@ -146,10 +144,7 @@ mod tests {
         );
         m.insert(
             "Country".to_string(),
-            vec![
-                ("美国".to_string(), 2.0),
-                ("英国".to_string(), 1.0),
-            ],
+            vec![("美国".to_string(), 2.0), ("英国".to_string(), 1.0)],
         );
         m
     }

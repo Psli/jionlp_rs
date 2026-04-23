@@ -32,8 +32,16 @@ pub struct F1 {
 
 impl F1 {
     pub fn compute(tp: usize, fp: usize, fn_: usize) -> Self {
-        let precision = if tp + fp == 0 { 0.0 } else { tp as f64 / (tp + fp) as f64 };
-        let recall = if tp + fn_ == 0 { 0.0 } else { tp as f64 / (tp + fn_) as f64 };
+        let precision = if tp + fp == 0 {
+            0.0
+        } else {
+            tp as f64 / (tp + fp) as f64
+        };
+        let recall = if tp + fn_ == 0 {
+            0.0
+        } else {
+            tp as f64 / (tp + fn_) as f64
+        };
         let f1 = if precision + recall == 0.0 {
             0.0
         } else {
@@ -110,11 +118,7 @@ pub mod pos {
         for (w, p) in pos_list {
             let mut first = true;
             for _c in w.chars() {
-                tags.push(format!(
-                    "{}-{}",
-                    if first { "B" } else { "I" },
-                    p
-                ));
+                tags.push(format!("{}-{}", if first { "B" } else { "I" }, p));
                 first = false;
             }
             chars.push_str(w);
@@ -138,10 +142,10 @@ pub mod pos {
                     out.push((w, cur_pos.clone().unwrap_or_default()));
                 }
                 start = Some(idx);
-                cur_pos = Some(tag.splitn(2, '-').nth(1).unwrap_or("").to_string());
+                cur_pos = Some(tag.split_once('-').map(|x| x.1).unwrap_or("").to_string());
             } else if tag.starts_with('I') && start.is_none() {
                 start = Some(idx);
-                cur_pos = Some(tag.splitn(2, '-').nth(1).unwrap_or("").to_string());
+                cur_pos = Some(tag.split_once('-').map(|x| x.1).unwrap_or("").to_string());
             }
         }
         if let Some(s) = start {
@@ -201,7 +205,11 @@ pub mod ner {
                 'E' => {
                     if let Some(s) = start {
                         let t: String = tokens[s..=idx].join("");
-                        let type_ = tags[s].splitn(2, '-').nth(1).unwrap_or("").to_string();
+                        let type_ = tags[s]
+                            .split_once('-')
+                            .map(|x| x.1)
+                            .unwrap_or("")
+                            .to_string();
                         out.push(Entity {
                             text: t,
                             type_,
@@ -211,7 +219,7 @@ pub mod ner {
                     }
                 }
                 'S' => {
-                    let type_ = tag.splitn(2, '-').nth(1).unwrap_or("").to_string();
+                    let type_ = tag.split_once('-').map(|x| x.1).unwrap_or("").to_string();
                     out.push(Entity {
                         text: tokens[idx].clone(),
                         type_,
@@ -246,10 +254,18 @@ mod tests {
     #[test]
     fn cws_word_tag_roundtrip() {
         let words = vec![
-            "他".to_string(), "指出".to_string(), "：".to_string(),
-            "近".to_string(), "几".to_string(), "年".to_string(),
-            "来".to_string(), "，".to_string(), "足球场".to_string(),
-            "风气".to_string(), "差劲".to_string(), "。".to_string(),
+            "他".to_string(),
+            "指出".to_string(),
+            "：".to_string(),
+            "近".to_string(),
+            "几".to_string(),
+            "年".to_string(),
+            "来".to_string(),
+            "，".to_string(),
+            "足球场".to_string(),
+            "风气".to_string(),
+            "差劲".to_string(),
+            "。".to_string(),
         ];
         let (chars, tags) = cws::word2tag(&words);
         assert_eq!(chars, "他指出：近几年来，足球场风气差劲。");
@@ -279,15 +295,32 @@ mod tests {
             .map(|c| c.to_string())
             .collect();
         let ents = vec![
-            Entity { text: "胡静静".into(), type_: "Person".into(), offset: (0, 3) },
-            Entity { text: "水利局".into(), type_: "Orgnization".into(), offset: (4, 7) },
+            Entity {
+                text: "胡静静".into(),
+                type_: "Person".into(),
+                offset: (0, 3),
+            },
+            Entity {
+                text: "水利局".into(),
+                type_: "Orgnization".into(),
+                offset: (4, 7),
+            },
         ];
         let tags = ner::entity2tag(tokens.len(), &ents);
         assert_eq!(
             tags,
-            vec!["B-Person", "I-Person", "E-Person", "O",
-                 "B-Orgnization", "I-Orgnization", "E-Orgnization",
-                 "O", "O", "O"]
+            vec![
+                "B-Person",
+                "I-Person",
+                "E-Person",
+                "O",
+                "B-Orgnization",
+                "I-Orgnization",
+                "E-Orgnization",
+                "O",
+                "O",
+                "O"
+            ]
         );
         let back = ner::tag2entity(&tokens, &tags);
         assert_eq!(back.len(), 2);
@@ -298,12 +331,28 @@ mod tests {
     #[test]
     fn ner_f1() {
         let gold = vec![
-            Entity { text: "甲".into(), type_: "A".into(), offset: (0, 1) },
-            Entity { text: "乙".into(), type_: "B".into(), offset: (2, 3) },
+            Entity {
+                text: "甲".into(),
+                type_: "A".into(),
+                offset: (0, 1),
+            },
+            Entity {
+                text: "乙".into(),
+                type_: "B".into(),
+                offset: (2, 3),
+            },
         ];
         let pred = vec![
-            Entity { text: "甲".into(), type_: "A".into(), offset: (0, 1) },
-            Entity { text: "丙".into(), type_: "C".into(), offset: (5, 6) },
+            Entity {
+                text: "甲".into(),
+                type_: "A".into(),
+                offset: (0, 1),
+            },
+            Entity {
+                text: "丙".into(),
+                type_: "C".into(),
+                offset: (5, 6),
+            },
         ];
         let r = ner::entity_compare(&pred, &gold);
         assert_eq!(r.true_positives, 1);

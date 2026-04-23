@@ -35,11 +35,7 @@ impl IdiomSolitaireGame {
     /// Returns:
     ///   * `Ok(Some(idiom))` on success.
     ///   * `Ok(None)` when no next idiom can be found.
-    pub fn next_by_char(
-        &self,
-        cur_idiom: &str,
-        with_prob: bool,
-    ) -> Result<Option<String>> {
+    pub fn next_by_char(&self, cur_idiom: &str, with_prob: bool) -> Result<Option<String>> {
         let dict = all_idioms()?;
         {
             let mut used = self.used.borrow_mut();
@@ -55,9 +51,7 @@ impl IdiomSolitaireGame {
         let used = self.used.borrow();
         let mut candidates: Vec<(&String, u32)> = dict
             .iter()
-            .filter(|(idiom, _)| {
-                idiom.chars().next() == Some(last_char) && !used.contains(*idiom)
-            })
+            .filter(|(idiom, _)| idiom.starts_with(last_char) && !used.contains(*idiom))
             .map(|(idiom, freq)| (idiom, *freq))
             .collect();
         drop(used);
@@ -108,8 +102,7 @@ fn hash_str(s: &str) -> u64 {
 static IDIOMS: OnceCell<&'static rustc_hash::FxHashMap<String, u32>> = OnceCell::new();
 
 fn all_idioms() -> Result<&'static rustc_hash::FxHashMap<String, u32>> {
-    IDIOMS.get_or_try_init(|| dict::chinese_idioms().map(|d| &*d))
-        .copied()
+    IDIOMS.get_or_try_init(|| dict::chinese_idioms()).copied()
 }
 
 #[cfg(test)]

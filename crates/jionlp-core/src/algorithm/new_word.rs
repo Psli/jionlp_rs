@@ -31,8 +31,7 @@ pub fn new_word_discovery(
         return Vec::new();
     }
     // 2. Left/right context dicts with PMI filter.
-    let (l_dict, r_dict) =
-        lrg_info(&word_freq, total_word, min_freq, min_mutual_information);
+    let (l_dict, r_dict) = lrg_info(&word_freq, total_word, min_freq, min_mutual_information);
     let entropy_r = calc_entropy(&l_dict);
     let entropy_l = calc_entropy(&r_dict);
 
@@ -84,10 +83,7 @@ fn lrg_info(
     total_word: u64,
     min_freq: u32,
     min_mtro: f64,
-) -> (
-    FxHashMap<String, Vec<u32>>,
-    FxHashMap<String, Vec<u32>>,
-) {
+) -> (FxHashMap<String, Vec<u32>>, FxHashMap<String, Vec<u32>>) {
     let mut l_dict: FxHashMap<String, Vec<u32>> = FxHashMap::default();
     let mut r_dict: FxHashMap<String, Vec<u32>> = FxHashMap::default();
 
@@ -99,8 +95,24 @@ fn lrg_info(
         }
         let left_word: String = chars[..wlen - 1].iter().collect();
         let right_word: String = chars[1..].iter().collect();
-        update_dict(&mut l_dict, &left_word, word_freq, total_word, *freq, min_freq, min_mtro);
-        update_dict(&mut r_dict, &right_word, word_freq, total_word, *freq, min_freq, min_mtro);
+        update_dict(
+            &mut l_dict,
+            &left_word,
+            word_freq,
+            total_word,
+            *freq,
+            min_freq,
+            min_mtro,
+        );
+        update_dict(
+            &mut r_dict,
+            &right_word,
+            word_freq,
+            total_word,
+            *freq,
+            min_freq,
+            min_mtro,
+        );
     }
     (l_dict, r_dict)
 }
@@ -138,8 +150,7 @@ fn update_dict(
         side_word_freq as f64 * total_word as f64 / mul1.max(mul2).max(1.0)
     };
     if mul_info > min_mtro {
-        side
-            .entry(side_word.to_string())
+        side.entry(side_word.to_string())
             .or_insert_with(|| vec![side_word_freq])
             .push(freq);
     }
@@ -160,7 +171,11 @@ fn calc_entropy(dict: &FxHashMap<String, Vec<u32>>) -> FxHashMap<String, f64> {
             .iter()
             .map(|x| {
                 let p = *x as f64 / sum;
-                if p > 0.0 { -p * p.log2() } else { 0.0 }
+                if p > 0.0 {
+                    -p * p.log2()
+                } else {
+                    0.0
+                }
             })
             .sum();
         out.insert(w.clone(), entropy);
