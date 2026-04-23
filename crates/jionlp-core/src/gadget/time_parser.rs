@@ -1471,8 +1471,12 @@ fn try_named_period(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         || text.starts_with("上一")
         || text.starts_with("下一");
     // Tolerate a leading `个` — covers `上一个月` matching via `上一` with
-    // rest `个月`. Also strip surrounding whitespace.
-    let rest = rest.trim_start_matches('个').trim();
+    // rest `个月`. Also strip surrounding whitespace. Also tolerate a
+    // leading `一` so `这一年` matches via `这` prefix + rest `一年`.
+    let rest = rest
+        .trim_start_matches('个')
+        .trim_start_matches('一')
+        .trim();
 
     // Deliberately exclude 天/日 from this path — relative-day handles
     // 今天/明天/昨天 etc. This parser only covers calendar periods
@@ -3543,6 +3547,12 @@ fn try_super_blur_ymd(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         "未来" => 1,
         _ => return None,
     };
+    // `这一X` is idiomatic "this X" (whole calendar unit), not
+    // "past 1 X". Hand it off to try_named_period so `这一年` returns
+    // the full year and `这一月` returns the full month.
+    if dir == "这" && n == 1 {
+        return None;
+    }
     let today = now.date();
     let (start, end) = match unit {
         "天" | "日" => {
@@ -5012,12 +5022,16 @@ fn try_lunar_date(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     //   "农历MMDD" (current lunar year)
     //   "腊月初八" (no 农历 marker; standalone lunar month implies lunar)
     let (year, body) = {
-        // Standard: 农历 may appear anywhere near the front.
-        let stripped_prefix = text.strip_prefix("农历").unwrap_or(text);
+        // `农历` and `阴历` are synonyms; also accept the prefix mid-sentence
+        // (e.g. `阴历二〇二一年六月`).
+        let stripped_prefix = text
+            .strip_prefix("农历")
+            .or_else(|| text.strip_prefix("阴历"))
+            .unwrap_or(text);
         // Year?
         if let Some(caps) = {
             static RE: Lazy<Regex> =
-                Lazy::new(|| Regex::new(r"^(\d{2,4})\s*年\s*(?:农历\s*)?(.+)$").unwrap());
+                Lazy::new(|| Regex::new(r"^(\d{2,4})\s*年\s*(?:(?:农历|阴历)\s*)?(.+)$").unwrap());
             RE.captures(stripped_prefix)
         } {
             (
@@ -5026,7 +5040,8 @@ fn try_lunar_date(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
             )
         } else if let Some(caps) = {
             static RE: Lazy<Regex> = Lazy::new(|| {
-                Regex::new(r"^([零〇一二三四五六七八九十两]+)\s*年\s*(?:农历\s*)?(.+)$").unwrap()
+                Regex::new(r"^([零〇一二三四五六七八九十两]+)\s*年\s*(?:(?:农历|阴历)\s*)?(.+)$")
+                    .unwrap()
             });
             RE.captures(stripped_prefix)
         } {
@@ -5035,7 +5050,10 @@ fn try_lunar_date(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
                 caps.get(2)?.as_str().to_string(),
             )
         } else if let Some((off, rest)) = limit_year_prefix(stripped_prefix) {
-            let rest = rest.strip_prefix("农历").unwrap_or(rest);
+            let rest = rest
+                .strip_prefix("农历")
+                .or_else(|| rest.strip_prefix("阴历"))
+                .unwrap_or(rest);
             (now.year() + off, rest.to_string())
         } else {
             (now.year(), stripped_prefix.to_string())
