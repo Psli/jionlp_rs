@@ -232,6 +232,11 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if let Some(t) = try_half_year(trimmed, now) {
         return Some(t);
     }
+    // Python parity — `<year>首月` / `<year>末月` / `<year>第N个月`
+    // / `<year>前N个月` / `<year>后N个月`.
+    if let Some(t) = try_year_ordinal_month(trimmed, now) {
+        return Some(t);
+    }
     // Python parity — `同月D号/日[clock]` / `同年M月D号` — inherits
     // year/month from `now`.
     if let Some(t) = try_same_month_or_year(trimmed, now) {
@@ -959,6 +964,10 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         .strip_prefix('从')
         .or_else(|| text.strip_prefix('自'))
         .unwrap_or(text);
+    // Python-parity: also strip trailing 止/止at the end (`自X至Y止`).
+    let text = text.strip_suffix('止').unwrap_or(text);
+    // And the `起` marker between A and B (`自X起至Y[止]`).
+    // Handled uniformly via split — not a prefix/suffix operation.
 
     // If the whole text parses as a single Y.M-D date (e.g. `1994.01-19`),
     // prefer that over range splitting.
@@ -981,6 +990,8 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     let (idx, len) = best?;
     let left = text[..idx].trim();
     let right = text[idx + len..].trim();
+    // Python-parity: trim trailing `起` from LHS (`自X起至Y止`).
+    let left = left.strip_suffix('起').unwrap_or(left).trim();
     if left.is_empty() || right.is_empty() {
         return None;
     }
@@ -2214,6 +2225,86 @@ fn try_same_month_or_year(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         let (day, tail) = parse_day_token(rest)?;
         let (start, end) = date_range(year, Some(month), Some(day))?;
         return apply_optional_clock(start, end, tail.trim());
+    }
+    None
+}
+
+/// `<year>首月/末月/第N个月/前N个月/后N个月`. Covers:
+///   `2005年首月` → whole of January
+///   `70年第8个月` → August whole
+///   `五八年前七个月` → Jan-Jul
+///   `二零二一年后三月` → Oct-Dec
+fn try_year_ordinal_month(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    let (year, rest) = resolve_optional_year_prefix(text, now)?;
+    if year == now.year() && rest == text {
+        // No year prefix → this function doesn't apply to bare forms.
+        return None;
+    }
+    // 首月 / 末月.
+    if rest == "首月" {
+        let (start, end) = date_range(year, Some(1), None)?;
+        return Some(TimeInfo {
+            time_type: "time_span",
+            start,
+            end,
+            definition: "accurate",
+            ..Default::default()
+        });
+    }
+    if rest == "末月" {
+        let (start, end) = date_range(year, Some(12), None)?;
+        return Some(TimeInfo {
+            time_type: "time_span",
+            start,
+            end,
+            definition: "accurate",
+            ..Default::default()
+        });
+    }
+    // 第N个月 (N-th month).
+    static RE_NTH: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^第\s*(\d+|[一二三四五六七八九十]+)\s*(?:个)?月$").unwrap());
+    if let Some(caps) = RE_NTH.captures(rest) {
+        let n_str = caps.get(1)?.as_str();
+        let n: u32 = n_str.parse::<u32>().ok().or_else(|| cn_int(n_str))?;
+        if (1..=12).contains(&n) {
+            let (start, end) = date_range(year, Some(n), None)?;
+            return Some(TimeInfo {
+                time_type: "time_span",
+                start,
+                end,
+                definition: "accurate",
+                ..Default::default()
+            });
+        }
+    }
+    // 前N个月 / 后N个月.
+    static RE_SPAN: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"^(前|后|首|末)\s*(\d+|[一二三四五六七八九十]+)\s*(?:个)?月$").unwrap()
+    });
+    if let Some(caps) = RE_SPAN.captures(rest) {
+        let dir = caps.get(1)?.as_str();
+        let n_str = caps.get(2)?.as_str();
+        let n: u32 = n_str.parse::<u32>().ok().or_else(|| cn_int(n_str))?;
+        if !(1..=12).contains(&n) {
+            return None;
+        }
+        let (first_m, last_m) = match dir {
+            "前" | "首" => (1u32, n),
+            "后" | "末" => (13 - n, 12),
+            _ => return None,
+        };
+        let first = NaiveDate::from_ymd_opt(year, first_m, 1)?;
+        let end_year = if last_m == 12 { year + 1 } else { year };
+        let end_month = if last_m == 12 { 1 } else { last_m + 1 };
+        let last = NaiveDate::from_ymd_opt(end_year, end_month, 1)?.pred_opt()?;
+        return Some(TimeInfo {
+            time_type: "time_span",
+            start: first.and_hms_opt(0, 0, 0)?,
+            end: last.and_hms_opt(23, 59, 59)?,
+            definition: "accurate",
+            ..Default::default()
+        });
     }
     None
 }
