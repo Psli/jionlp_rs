@@ -207,6 +207,14 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if let Some(t) = try_year_solar_season_boundary(trimmed) {
         return Some(t);
     }
+    // Python parity — relative year + quarter + boundary.
+    if let Some(t) = try_relative_year_quarter_boundary(trimmed, now) {
+        return Some(t);
+    }
+    // Python parity — limit quarter + boundary (`上季度末`, etc.).
+    if let Some(t) = try_limit_quarter_boundary(trimmed, now) {
+        return Some(t);
+    }
     // Round 17 #11 — `2021年第1季度`.
     if let Some(t) = try_year_solar_season(trimmed) {
         return Some(t);
@@ -259,6 +267,12 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     // Python parity — concrete date/time + 左右 / 前后 / 附近 suffix.
     // Strip the approx modifier, reparse, flag definition as `blur`.
     if let Some(t) = try_approx_modifier(trimmed, now) {
+        return Some(t);
+    }
+    // Python parity — delta + 之后/之前/以前/以后 where delta carries a
+    // range (`几十年之后`, `二十几年前`). Produces a time_span centered
+    // on now ± [low, high] years/months/etc.
+    if let Some(t) = try_delta_range_suffix(trimmed, now) {
         return Some(t);
     }
     // Round 29 #48 — `明年第10周` — limit year + week.
@@ -2242,6 +2256,64 @@ fn try_bare_quarter(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     })
 }
 
+/// Delta-range + 之后/之前/以前/以后 suffix. Python's convention:
+///   `几十年之后` → [now + 20y, now + 100y]
+///   `二十几年前` → [now - 30y, now - 20y]
+///   `1000多年之后` → [now + 1000y, now + 1100y] (skipped via inf sentinel)
+fn try_delta_range_suffix(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    let (is_after, body) = if let Some(b) = text
+        .strip_suffix("之后")
+        .or_else(|| text.strip_suffix("以后"))
+        .or_else(|| text.strip_suffix('后'))
+    {
+        (true, b)
+    } else if let Some(b) = text
+        .strip_suffix("之前")
+        .or_else(|| text.strip_suffix("以前"))
+        .or_else(|| text.strip_suffix('前'))
+    {
+        (false, b)
+    } else {
+        return None;
+    };
+    let body = body.trim();
+    // Parse body as pure delta and require it to have a range (not point).
+    let inner = try_pure_delta(body)?;
+    if inner.time_type != "time_delta" {
+        return None;
+    }
+    let delta = inner.delta?;
+    // Only handle year/month here — day/hour spans are tiny and less
+    // commonly requested in this shape.
+    let (lo_years, hi_years) = match delta.year {
+        Some(DeltaValue::Range(lo, hi)) => (lo, hi),
+        Some(DeltaValue::Single(n)) => (n, n),
+        _ => return None,
+    };
+    if lo_years.is_sign_negative() || hi_years.is_sign_negative() {
+        return None;
+    }
+    let y1 = if is_after {
+        now.year() + lo_years as i32
+    } else {
+        now.year() - hi_years as i32
+    };
+    let y2 = if is_after {
+        now.year() + hi_years as i32
+    } else {
+        now.year() - lo_years as i32
+    };
+    let first = NaiveDate::from_ymd_opt(y1, 1, 1)?;
+    let last = NaiveDate::from_ymd_opt(y2, 12, 31)?;
+    Some(TimeInfo {
+        time_type: "time_span",
+        start: first.and_hms_opt(0, 0, 0)?,
+        end: last.and_hms_opt(23, 59, 59)?,
+        definition: "blur",
+        ..Default::default()
+    })
+}
+
 /// Concrete time + 左右 / 前后 / 附近. Strip the modifier, reparse,
 /// change definition to `blur`. Python keeps the same concrete result.
 fn try_approx_modifier(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
@@ -3570,16 +3642,39 @@ fn try_limit_year_span_month(text: &str, now: NaiveDateTime) -> Option<TimeInfo>
 
 /// Pattern #13/#14 — `YYYY年第N季度(初|中|末|底)` — season boundary.
 fn try_year_solar_season_boundary(text: &str) -> Option<TimeInfo> {
-    static RE: Lazy<Regex> = Lazy::new(|| {
+    // Case 1: explicit Arabic year.
+    static RE_ARAB: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"^(\d{2,4})\s*年\s*(?:第)?\s*([1-4一二三四])\s*季度\s*(初|中|末|底)$").unwrap()
     });
-    let caps = RE.captures(text)?;
-    let year = parse_year(caps.get(1)?.as_str())?;
-    let n_str = caps.get(2)?.as_str();
-    let q: u32 = n_str.parse::<u32>().ok().or_else(|| cn_int(n_str))?;
-    let pos = caps.get(3)?.as_str();
+    if let Some(caps) = RE_ARAB.captures(text) {
+        let year = parse_year(caps.get(1)?.as_str())?;
+        let n_str = caps.get(2)?.as_str();
+        let q: u32 = n_str.parse::<u32>().ok().or_else(|| cn_int(n_str))?;
+        let pos = caps.get(3)?.as_str();
+        return build_quarter_boundary(year, q, pos);
+    }
+    // Case 2: Chinese year.
+    static RE_CN: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"^([零〇一二三四五六七八九十两]+)\s*年\s*(?:第)?\s*([1-4一二三四])\s*季度\s*(初|中|末|底)$",
+        )
+        .unwrap()
+    });
+    if let Some(caps) = RE_CN.captures(text) {
+        let year = parse_chinese_year_digits(caps.get(1)?.as_str())?;
+        let n_str = caps.get(2)?.as_str();
+        let q: u32 = n_str.parse::<u32>().ok().or_else(|| cn_int(n_str))?;
+        let pos = caps.get(3)?.as_str();
+        return build_quarter_boundary(year, q, pos);
+    }
+    None
+}
+
+fn build_quarter_boundary(year: i32, q: u32, pos: &str) -> Option<TimeInfo> {
+    if !(1..=4).contains(&q) {
+        return None;
+    }
     let start_month = (q - 1) * 3 + 1;
-    // Map 初/中/末 to one of the three months of that quarter.
     let month = match pos {
         "初" => start_month,
         "中" => start_month + 1,
@@ -3602,21 +3697,92 @@ fn try_year_solar_season_boundary(text: &str) -> Option<TimeInfo> {
     })
 }
 
-/// Pattern #17 — `YYYY年暑假/寒假/春假` (school breaks).
-fn try_school_break(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+/// Relative-year + quarter + boundary (`去年四季度初`, `明年一季度末`).
+fn try_relative_year_quarter_boundary(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    let (offset, rest) = limit_year_prefix(text)?;
+    let rest = rest.trim_start_matches('的');
     static RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"^(?:(\d{2,4})\s*年\s*)?(暑假|寒假|春假|秋假)$").unwrap());
-    let caps = RE.captures(text)?;
-    let year = caps
-        .get(1)
-        .and_then(|m| parse_year(m.as_str()))
-        .unwrap_or(now.year());
-    let kind = caps.get(2)?.as_str();
+        Lazy::new(|| Regex::new(r"^(?:第)?\s*([1-4一二三四])\s*季度\s*(初|中|末|底)$").unwrap());
+    let caps = RE.captures(rest)?;
+    let n_str = caps.get(1)?.as_str();
+    let q: u32 = n_str.parse::<u32>().ok().or_else(|| cn_int(n_str))?;
+    let pos = caps.get(2)?.as_str();
+    build_quarter_boundary(now.year() + offset, q, pos)
+}
+
+/// Limit-quarter + boundary (`上季度末`, `本季度初`, `下季度中`).
+fn try_limit_quarter_boundary(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    const Q_PREF: &[(&str, i32)] = &[
+        ("本季度", 0),
+        ("这季度", 0),
+        ("当季度", 0),
+        ("上季度", -1),
+        ("上个季度", -1),
+        ("上一季度", -1),
+        ("下季度", 1),
+        ("下个季度", 1),
+        ("下一季度", 1),
+    ];
+    let mut best: Option<(i32, &str)> = None;
+    for (pref, off) in Q_PREF {
+        if let Some(rest) = text.strip_prefix(*pref) {
+            match best {
+                Some((_, r)) if r.len() < rest.len() => {}
+                _ => best = Some((*off, rest)),
+            }
+        }
+    }
+    let (offset, rest) = best?;
+    let pos = match rest.trim() {
+        "初" | "中" | "末" | "底" => rest.trim(),
+        _ => return None,
+    };
+    let cur_q = ((now.month() - 1) / 3) as i32 + 1;
+    let mut q = cur_q + offset;
+    let mut y = now.year();
+    while q < 1 {
+        q += 4;
+        y -= 1;
+    }
+    while q > 4 {
+        q -= 4;
+        y += 1;
+    }
+    build_quarter_boundary(y, q as u32, pos)
+}
+
+/// Pattern #17 — `YYYY年暑假/寒假/春假` (school breaks). Also accepts
+/// relative-year prefixes (`去年暑假`, `明年寒假`).
+fn try_school_break(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    // First try: relative-year prefix strip.
+    let (year, rest_after_year) = if let Some((off, rest)) = limit_year_prefix(text) {
+        (now.year() + off, rest.trim_start_matches('的'))
+    } else {
+        // Fallback to the old (optional Arabic year) regex.
+        static RE: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"^(?:(\d{2,4})\s*年\s*)?(暑假|寒假|春假|秋假)$").unwrap());
+        let caps = RE.captures(text)?;
+        let year = caps
+            .get(1)
+            .and_then(|m| parse_year(m.as_str()))
+            .unwrap_or(now.year());
+        let kind = caps.get(2)?.as_str();
+        return school_break_range(year, kind);
+    };
+    // relative-year path: `rest_after_year` should now be just the break name.
+    let kind = rest_after_year.trim();
+    if !matches!(kind, "暑假" | "寒假" | "春假" | "秋假") {
+        return None;
+    }
+    school_break_range(year, kind)
+}
+
+fn school_break_range(year: i32, kind: &str) -> Option<TimeInfo> {
     let (from_y, from_m, to_y, to_m) = match kind {
-        "暑假" => (year, 7u32, year, 8u32), // Jul-Aug
-        "寒假" => (year, 1, year, 2),       // Jan-Feb (mid-year ambig)
-        "春假" => (year, 4, year, 4),       // Apr
-        "秋假" => (year, 10, year, 10),     // Oct
+        "暑假" => (year, 7u32, year, 8u32),
+        "寒假" => (year, 1, year, 2),
+        "春假" => (year, 4, year, 4),
+        "秋假" => (year, 10, year, 10),
         _ => return None,
     };
     let first = NaiveDate::from_ymd_opt(from_y, from_m, 1)?;
@@ -4230,9 +4396,20 @@ fn try_pure_delta(text: &str) -> Option<TimeInfo> {
     } else if body == "好几" {
         DeltaValue::Range(3.0, 8.0)
     } else if body == "几十" {
-        DeltaValue::Range(20.0, 80.0)
+        // Python uses [20, 100] so `几十年之后` → now+100y.
+        DeltaValue::Range(20.0, 100.0)
     } else if body == "十几" {
         DeltaValue::Range(12.0, 18.0)
+    } else if let Some(caps) = {
+        // `二十几` / `三十几` / ... → Range(X0, X9). Covers
+        // `二十几年前` etc.
+        static RE: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"^([一二两三四五六七八九])十几$").unwrap());
+        RE.captures(body)
+    } {
+        let d = cn_digit_1_9(caps.get(1)?.as_str().chars().next()?)?;
+        // Python uses [N0, (N+1)0], e.g. `二十几年前` ⇒ 20–30 years back.
+        DeltaValue::Range((d as f64) * 10.0, (d as f64 + 1.0) * 10.0)
     } else if let Some(caps) = {
         // 两三 / 三四 / 五六 → range, takes priority over parse_chinese_number.
         static RE: Lazy<Regex> =
