@@ -672,7 +672,7 @@ fn parse_time_with_ref(text: String, reference_iso: String) -> NifResult<Option<
 // ── extract_time ──────────────────────────────────────────────────────────
 
 #[derive(rustler::NifStruct)]
-#[module = "Elixir.JioNLP.TimeEntity"]
+#[module = "JioNLP.TimeEntity"]
 struct NifTimeEntity {
     text: String,
     offset: (usize, usize),
