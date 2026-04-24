@@ -171,6 +171,6 @@ mod tests {
     fn encoded_length_matches_utf8_length() {
         // Each byte maps to exactly one char.
         let src = "中国";
-        assert_eq!(bpe_encode(src).chars().count(), src.as_bytes().len());
+        assert_eq!(bpe_encode(src).chars().count(), src.len());
     }
 }

@@ -417,6 +417,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn char2num_decimal_point() {
         let r = char2num("三点一四").unwrap();
         assert!((r - 3.14).abs() < 1e-9);
