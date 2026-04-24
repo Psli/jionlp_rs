@@ -245,6 +245,10 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if let Some(t) = try_named_week_weekday(trimmed, now) {
         return Some(t);
     }
+    // Python parity — `<year>?<M月(份)?>(的)?第N个(周|星期|礼拜)<weekday>`.
+    if let Some(t) = try_nth_weekday_of_month_loose(trimmed, now) {
+        return Some(t);
+    }
     // Python parity — `<year>?上半年/下半年` / `<year>?伊始`.
     if let Some(t) = try_half_year(trimmed, now) {
         return Some(t);
@@ -797,7 +801,9 @@ fn bare_period_window(tail: &str) -> Option<(u32, u32)> {
     let t = tail.trim();
     match t {
         "早上" | "早晨" | "早" => Some((6, 9)),
-        "上午" => Some((7, 11)),
+        // Python corpus treats 上午 the same as 早上 (6-9). Our earlier
+        // (7-11) was too wide.
+        "上午" => Some((6, 9)),
         "中午" => Some((12, 12)),
         "下午" | "午后" => Some((13, 17)),
         "傍晚" => Some((17, 18)),
@@ -2468,9 +2474,9 @@ fn try_delta_range_suffix(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     })
 }
 
-/// Concrete time + 左右 / 前后 / 附近. Strip the modifier, reparse,
-/// change definition to `blur`. Python keeps the same concrete result.
+/// Concrete time + 左右 / 前后 / 附近 / 许. Strip the modifier, reparse.
 fn try_approx_modifier(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    // Multi-char suffixes first so `左右` beats `右`.
     for suf in ["左右", "前后", "附近"] {
         if let Some(body) = text.strip_suffix(suf) {
             let body = body.trim();
@@ -2482,6 +2488,42 @@ fn try_approx_modifier(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
                 definition: "blur",
                 ..inner
             });
+        }
+    }
+    // `N点许` / `N点多钟` — blur the hour to a whole-hour window.
+    if let Some(body) = text.strip_suffix('许') {
+        let body = body.trim();
+        if !body.is_empty() {
+            let inner = parse_time_with_ref(body, now)?;
+            if inner.time_type == "time_point" {
+                // Expand end to the end of the start's hour.
+                let hour_end = inner
+                    .start
+                    .with_minute(59)
+                    .and_then(|t| t.with_second(59))?;
+                return Some(TimeInfo {
+                    end: hour_end,
+                    ..inner
+                });
+            }
+        }
+    }
+    // `N点多钟` — same semantics as 许.
+    if let Some(body) = text.strip_suffix("多钟") {
+        let body = body.trim();
+        if !body.is_empty() {
+            let inner = parse_time_with_ref(body, now)?;
+            if inner.time_type == "time_point" {
+                let hour_end = inner
+                    .start
+                    .with_minute(59)
+                    .and_then(|t| t.with_second(59))?;
+                return Some(TimeInfo {
+                    end: hour_end,
+                    definition: "blur",
+                    ..inner
+                });
+            }
         }
     }
     None
@@ -2747,6 +2789,47 @@ fn try_relative_year_month_day(text: &str, now: NaiveDateTime) -> Option<TimeInf
         .trim();
     let (start, end) = date_range(year, Some(month), Some(day))?;
     apply_optional_clock(start, end, tail)
+}
+
+/// `<year>?<M月(份)?>(的)?第N个(周|星期|礼拜)<weekday>`.
+/// E.g. `八月份的第一个周二` → 2021-08-03.
+fn try_nth_weekday_of_month_loose(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    let (year, rest) = resolve_optional_year_prefix(text, now)?;
+    let rest = rest.trim_start_matches('的');
+    let (month, rest) = parse_month_token(rest)?;
+    let rest = rest
+        .trim_start_matches('份')
+        .trim_start_matches('的')
+        .trim();
+
+    static RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"^第\s*(\d+|[一二三四五]+)\s*个?\s*(周|星期|礼拜)\s*(.+)$").unwrap()
+    });
+    let caps = RE.captures(rest)?;
+    let n_str = caps.get(1)?.as_str();
+    let nth: u32 = n_str.parse::<u32>().ok().or_else(|| cn_int(n_str))?;
+    if !(1..=5).contains(&nth) {
+        return None;
+    }
+    let wday_token = caps.get(3)?.as_str().trim();
+    let weekday: u32 = match wday_token {
+        "一" | "1" => 0,
+        "二" | "2" => 1,
+        "三" | "3" => 2,
+        "四" | "4" => 3,
+        "五" | "5" => 4,
+        "六" | "6" => 5,
+        "日" | "天" | "7" => 6,
+        _ => return None,
+    };
+    let date = nth_weekday_of_month(year, month, weekday, nth)?;
+    Some(TimeInfo {
+        time_type: "time_point",
+        start: date.and_hms_opt(0, 0, 0)?,
+        end: date.and_hms_opt(23, 59, 59)?,
+        definition: "accurate",
+        ..Default::default()
+    })
 }
 
 /// `<限定周> + <星期|周|礼拜>N` / `上个礼拜天` / `下周周六`. Resolves
