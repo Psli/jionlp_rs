@@ -343,6 +343,29 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if let Some(t) = try_nested_delta_point(trimmed, now) {
         return Some(t);
     }
+    // Python parity — bare `\d{1,2}日` / `\d{1,2}号` with no month/year
+    // context is the Nth of the current month, NOT an N-day delta. Run
+    // before try_time_delta so `30日` doesn't get stolen.
+    if let Some(cap) = {
+        static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d{1,2})\s*[日号]$").unwrap());
+        RE.captures(trimmed)
+    } {
+        let d: u32 = cap
+            .get(1)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        if (1..=31).contains(&d) {
+            if let Some((start, end)) = date_range(now.year(), Some(now.month()), Some(d)) {
+                return Some(TimeInfo {
+                    time_type: "time_point",
+                    start,
+                    end,
+                    definition: "accurate",
+                    ..Default::default()
+                });
+            }
+        }
+    }
     if let Some(t) = try_time_delta(trimmed, now) {
         return Some(t);
     }
@@ -426,8 +449,113 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if let Some(t) = try_standalone_weekday(trimmed, now) {
         return Some(t);
     }
+    // Bare `MM:SS` where first group > 23 is ambiguously minute:second,
+    // but Python interprets it relative to the ref's hour. Handle here so
+    // try_clock_only doesn't reject it.
+    {
+        let norm = trimmed.replace('：', ":");
+        static MMSS: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d{1,2}):(\d{1,2})$").unwrap());
+        if let Some(caps) = MMSS.captures(&norm) {
+            if let (Some(a), Some(b)) = (caps.get(1), caps.get(2)) {
+                if let (Ok(m), Ok(s)) = (a.as_str().parse::<u32>(), b.as_str().parse::<u32>()) {
+                    if (24..60).contains(&m) && s < 60 {
+                        if let Some(dt) = now.date().and_hms_opt(now.hour(), m, s) {
+                            return Some(TimeInfo {
+                                time_type: "time_point",
+                                start: dt,
+                                end: dt,
+                                definition: "accurate",
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
     if let Some(t) = try_clock_only(trimmed, now.date()) {
         return Some(t);
+    }
+    // Bare period-of-day (`白天`, `午后`, `午夜`, `黎明`, `后半夜`, `晚上`,
+    // `凌晨`, etc.) → today's coarse window as time_point.
+    if let Some((h1, h2)) = bare_period_window(trimmed) {
+        let day = now.date();
+        return Some(TimeInfo {
+            time_type: "time_point",
+            start: day.and_hms_opt(h1, 0, 0)?,
+            end: day.and_hms_opt(h2, 59, 59)?,
+            definition: "accurate",
+            ..Default::default()
+        });
+    }
+    // Bare `N日` / `N号` without month/year → day of current month.
+    // Runs last to avoid stealing `两日` / `三日` (time_delta).
+    if let Some(cap) = {
+        static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d{1,2})\s*[日号]$").unwrap());
+        RE.captures(trimmed)
+    } {
+        let d: u32 = cap.get(1)?.as_str().parse().ok()?;
+        if (1..=31).contains(&d) {
+            if let Some((start, end)) = date_range(now.year(), Some(now.month()), Some(d)) {
+                return Some(TimeInfo {
+                    time_type: "time_point",
+                    start,
+                    end,
+                    definition: "accurate",
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    // Last-resort: extract a clock embedded in noisy text (Python's
+    // normalize_standard_num_hour_second behavior). Looks for a
+    // `<hour>点(<minute>分)?` anywhere in the string and resolves to
+    // the ref's day.
+    {
+        static EMBEDDED_CLOCK: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(
+                r"((凌晨|早上|早晨|上午|中午|下午|午后|晚上|傍晚|夜里|夜间|半夜)\s*)?(\d{1,2}|[一二两三四五六七八九十]{1,3})\s*点(?:\s*(\d{1,2}|[一二两三四五六七八九十]{1,3})\s*分?)?",
+            )
+            .unwrap()
+        });
+        if let Some(caps) = EMBEDDED_CLOCK.captures(trimmed) {
+            let matched = caps.get(0)?.as_str();
+            // Only fire when the match is a non-trivial chunk inside noise
+            // (i.e., surrounding text is present on at least one side);
+            // full-match inputs would already have been caught above.
+            if matched.chars().count() < trimmed.chars().count() {
+                let period = caps.get(2).map(|m| m.as_str());
+                let hour_str = caps.get(3)?.as_str();
+                let hour: u32 = hour_str.parse::<u32>().ok().or_else(|| cn_int(hour_str))?;
+                let minute = caps
+                    .get(4)
+                    .and_then(|m| {
+                        let s = m.as_str();
+                        s.parse::<u32>().ok().or_else(|| cn_int(s))
+                    })
+                    .unwrap_or(0);
+                let adj_hour = normalize_hour_by_period(hour, period);
+                if adj_hour < 24 && minute < 60 {
+                    let day = now.date();
+                    if let Some(t) = day.and_hms_opt(adj_hour, minute, 0) {
+                        let end = if minute == 0 {
+                            t.with_minute(59)
+                                .and_then(|x| x.with_second(59))
+                                .unwrap_or(t)
+                        } else {
+                            t.with_second(59).unwrap_or(t)
+                        };
+                        return Some(TimeInfo {
+                            time_type: "time_point",
+                            start: t,
+                            end,
+                            definition: "accurate",
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
     }
     None
 }
@@ -587,11 +715,9 @@ fn try_absolute_date(text: &str) -> Option<TimeInfo> {
     None
 }
 
-/// Expand 2-digit years the same way the Python library does: 70..99 →
-/// 1900s, 00..69 → 2000s. Fully-typed 4-digit years pass through.
-/// Ref year used by `parse_year` to disambiguate 2-digit years. Set by
-/// `parse_time_with_ref` at entry so patterns deep in the dispatch can
-/// resolve `三三年` differently in 2021 vs 2099.
+// Ref year used by `parse_year` to disambiguate 2-digit years. Set by
+// `parse_time_with_ref` at entry so patterns deep in the dispatch can
+// resolve `三三年` differently in 2021 vs 2099.
 std::thread_local! {
     static REF_YEAR: std::cell::Cell<i32> = const { std::cell::Cell::new(2025) };
 }
@@ -639,7 +765,7 @@ fn parse_year(s: &str) -> Option<i32> {
         return Some(n);
     }
     let ref_year = current_ref_year();
-    if ref_year < 1900 || ref_year >= 2100 {
+    if !(1900..2100).contains(&ref_year) {
         // Fallback to static 70/00 cutoff outside the supported range.
         return Some(if n >= 70 { 1900 + n } else { 2000 + n });
     }
@@ -779,6 +905,36 @@ fn apply_optional_clock(start: NaiveDateTime, end: NaiveDateTime, tail: &str) ->
         });
     }
 
+    // Range separators in the tail belong to try_date_range /
+    // try_clock_range — don't try to swallow them as a point clock.
+    if tail.contains('到') || tail.contains('至') || tail.contains('~') || tail.contains('～') {
+        return None;
+    }
+    // Strip a leading weekday confirmation (`周六`, `星期三`, `礼拜日`).
+    static WEEKDAY_PREFIX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^(周|星期|礼拜)[一二三四五六日天末]").unwrap());
+    let tail = if let Some(m) = WEEKDAY_PREFIX.find(tail) {
+        tail[m.end()..].trim()
+    } else {
+        tail
+    };
+    if tail.is_empty() {
+        return Some(TimeInfo {
+            time_type: "time_point",
+            start,
+            end,
+            definition: "accurate",
+            ..Default::default()
+        });
+    }
+    // Tail contains an embedded YMD-like date (`-YYYY.MM.DD` / similar).
+    // That means the outer caller bundled a full datetime span together
+    // — give up so try_date_range can split on the embedded date.
+    static EMBEDDED_DATE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\d{4}[\-./]\d{1,2}[\-./]\d{1,2}").unwrap());
+    if EMBEDDED_DATE.is_match(tail) {
+        return None;
+    }
     // Tolerate a leading dash/slash before the clock (e.g.
     // `2021-09-12-11：23` — tail `-11：23`). Also strip fullwidth colon
     // variants before parse_clock sees them.
@@ -793,10 +949,18 @@ fn apply_optional_clock(start: NaiveDateTime, end: NaiveDateTime, tail: &str) ->
         || tail_clean.contains(':')
         || tail_clean.contains("点半")
         || tail_clean.contains("时半")
-        || tail_clean.contains("一刻")
-        || tail_clean.contains("二刻")
-        || tail_clean.contains("两刻")
-        || tail_clean.contains("三刻");
+        || tail_clean.contains('刻')
+        // Chinese numeric minutes after 点 without 分 marker
+        // (`九点零九`, `九点三十五`).
+        || cn_normalize_clock(&tail_clean).contains('点')
+            && {
+                let n = cn_normalize_clock(&tail_clean);
+                // After `点`, look for one or more digits before end.
+                n.split('点').nth(1).is_some_and(|tail| {
+                    let t = tail.trim_start_matches("钟");
+                    t.chars().next().is_some_and(|c| c.is_ascii_digit())
+                })
+            };
     let end_dt = if tail_clean.contains('秒') || tail_clean.matches(':').count() >= 2 {
         dt
     } else if has_minute {
@@ -817,19 +981,24 @@ fn apply_optional_clock(start: NaiveDateTime, end: NaiveDateTime, tail: &str) ->
 
 /// Period-of-day coarse time window (hour-start, hour-end inclusive).
 fn bare_period_window(tail: &str) -> Option<(u32, u32)> {
-    // Match longest-first for `早上` vs `早`.
+    // Values match Python jionlp time_parser hour_limitation_2group_conn.
     let t = tail.trim();
     match t {
-        "早上" | "早晨" | "早" => Some((6, 9)),
-        // Python corpus treats 上午 the same as 早上 (6-9). Our earlier
-        // (7-11) was too wide.
-        "上午" => Some((6, 9)),
-        "中午" => Some((12, 12)),
-        "下午" | "午后" => Some((13, 17)),
+        "早上" | "早晨" | "一早" | "一大早" | "早" => Some((6, 9)),
+        "黎明" => Some((4, 6)),
+        "白天" => Some((6, 18)),
+        "上午" => Some((7, 11)),
+        "中午" => Some((12, 13)),
+        "午后" => Some((13, 14)),
+        "下午" => Some((13, 17)),
         "傍晚" => Some((17, 18)),
         "晚上" | "晚" => Some((18, 23)),
-        "夜里" | "夜间" | "半夜" => Some((0, 5)),
-        "凌晨" => Some((0, 5)),
+        "晚间" | "夜间" | "夜里" => Some((20, 23)),
+        "深夜" => Some((23, 23)),
+        "上半夜" | "前半夜" => Some((0, 2)),
+        "下半夜" | "后半夜" => Some((2, 4)),
+        "半夜" | "凌晨" => Some((0, 4)),
+        "午夜" => Some((0, 0)),
         _ => None,
     }
 }
@@ -839,8 +1008,17 @@ fn bare_period_window(tail: &str) -> Option<(u32, u32)> {
 fn cn_normalize_clock(s: &str) -> String {
     static RE_HOUR: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"([零〇一二两三四五六七八九十]+)([点时])").unwrap());
+    // `([点时])<CN-digits><分>` — with 分 required (keeps priority over
+    // the following pattern that requires 分 to be absent).
     static RE_MIN: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"([点时])([零〇一二两三四五六七八九十]+)(分)").unwrap());
+    // `([点时])<zero-prefix-CN-digits>` — when NO 分 marker follows,
+    // only accept minutes that start with `零`/`〇` (unambiguously
+    // minute-shaped: `点零九` → 9 mins), so `点一刻` / `点半` stay
+    // as their dedicated patterns. 3 capture groups to match
+    // sub_once's group-count dispatch.
+    static RE_MIN_ZERO: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"([点时])([零〇][零〇一二两三四五六七八九十]+)()").unwrap());
     static RE_SEC: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"(分)([零〇一二两三四五六七八九十]+)(秒)").unwrap());
     fn sub_once(input: &str, re: &Regex) -> String {
@@ -881,7 +1059,8 @@ fn cn_normalize_clock(s: &str) -> String {
     }
     let a = sub_once(s, &RE_HOUR);
     let b = sub_once(&a, &RE_MIN);
-    sub_once(&b, &RE_SEC)
+    let c = sub_once(&b, &RE_MIN_ZERO);
+    sub_once(&c, &RE_SEC)
 }
 
 /// Parse a clock expression. Accepts:
@@ -903,14 +1082,28 @@ fn parse_clock(s: &str) -> Option<NaiveTime> {
         (rest, Some(30))
     } else if let Some(rest) = s.strip_suffix("时半") {
         (rest, Some(30))
-    } else if let Some(rest) = s.strip_suffix("点一刻") {
+    } else if let Some(rest) = s
+        .strip_suffix("点一刻")
+        .or_else(|| s.strip_suffix("时一刻"))
+        .or_else(|| s.strip_suffix("点1刻"))
+        .or_else(|| s.strip_suffix("时1刻"))
+    {
         (rest, Some(15))
     } else if let Some(rest) = s
         .strip_suffix("点二刻")
         .or_else(|| s.strip_suffix("点两刻"))
+        .or_else(|| s.strip_suffix("时二刻"))
+        .or_else(|| s.strip_suffix("时两刻"))
+        .or_else(|| s.strip_suffix("点2刻"))
+        .or_else(|| s.strip_suffix("时2刻"))
     {
         (rest, Some(30))
-    } else if let Some(rest) = s.strip_suffix("点三刻") {
+    } else if let Some(rest) = s
+        .strip_suffix("点三刻")
+        .or_else(|| s.strip_suffix("时三刻"))
+        .or_else(|| s.strip_suffix("点3刻"))
+        .or_else(|| s.strip_suffix("时3刻"))
+    {
         (rest, Some(45))
     } else {
         (s, None)
@@ -972,7 +1165,11 @@ fn normalize_hour_by_period(hour: u32, period: Option<&str>) -> u32 {
         Some("中午") => hour, // 12:30 stays at 12:30
         Some("下午") | Some("午后") | Some("晚上") | Some("晚") | Some("傍晚") | Some("夜里")
         | Some("夜间") => {
-            if hour < 12 {
+            if hour == 12 {
+                // `晚上12点` / `夜里12点` = midnight (00:00 next day;
+                // day-roll handled by caller via day_shift heuristic).
+                0
+            } else if hour < 12 {
                 hour + 12
             } else {
                 hour
@@ -1017,6 +1214,7 @@ const FIXED_HOLIDAYS: &[(&str, u32, u32)] = &[
     ("教师节", 9, 10),
     ("国庆节", 10, 1),
     ("国庆", 10, 1),
+    ("十一", 10, 1), // 十一 = National Day (October 1st) — bare form
     ("万圣节", 10, 31),
     ("光棍节", 11, 11),
     ("双十一", 11, 11),
@@ -1167,6 +1365,7 @@ const LUNAR_HOLIDAYS: &[(&str, LunarHoliday)] = &[
 /// covering 1900-2100. Returns `None` only when the target date doesn't
 /// exist (e.g. some years have a short 12th month with only 29 days, so
 /// 除夕 falls on day 29 not 30).
+#[allow(dead_code)]
 fn lunar_holiday_date(year: i32, holiday: LunarHoliday) -> Option<(u32, u32)> {
     use crate::gadget::lunar_solar::lunar_to_solar;
 
@@ -1229,13 +1428,22 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         .unwrap_or(text);
     // Python-parity: also strip trailing 止/止at the end (`自X至Y止`).
     let text = text.strip_suffix('止').unwrap_or(text);
+    // `前` suffix on a range expression (e.g. `2020至2025年前`) is a
+    // redundant marker; strip it so the RHS parses cleanly.
+    let text = text.strip_suffix('前').unwrap_or(text);
     // And the `起` marker between A and B (`自X起至Y[止]`).
     // Handled uniformly via split — not a prefix/suffix operation.
 
     // If the whole text parses as a single Y.M-D date (e.g. `1994.01-19`),
-    // prefer that over range splitting.
-    if YMD_DASH.is_match(text) {
-        return None;
+    // prefer that over range splitting — unless the text clearly contains
+    // two Y.M.D chunks (`2019.05.29 15:20-2020.01.12 12:10`).
+    {
+        static TWO_YMDS: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"\d{4}[\-./]\d{1,2}[\-./]\d{1,2}.*\d{4}[\-./]\d{1,2}[\-./]\d{1,2}").unwrap()
+        });
+        if YMD_DASH.is_match(text) && !TWO_YMDS.is_match(text) {
+            return None;
+        }
     }
 
     // Longest first so `——` / `--` beat `—` / `-` and don't leave a
@@ -1245,7 +1453,7 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     let mut best: Option<(usize, usize)> = None; // (byte_pos, sep_len)
     for sep in SEPS {
         if let Some(idx) = text.find(sep) {
-            if best.map_or(true, |(b, _)| idx > b) {
+            if best.is_none_or(|(b, _)| idx > b) {
                 best = Some((idx, sep.len()));
             }
         }
@@ -1258,6 +1466,15 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if left.is_empty() || right.is_empty() {
         return None;
     }
+    // `24时` on RHS means midnight of the next day. Normalize so the
+    // RHS parses as `0时` and record that we need a day-shift.
+    let right_rebuf: String;
+    let (right, right_day_shift) = if right.ends_with("24时") {
+        right_rebuf = format!("{}0时", &right[..right.len() - "24时".len()]);
+        (right_rebuf.as_str(), true)
+    } else {
+        (right, false)
+    };
 
     // LHS: try full-year, then bare `M月D日`, then `本月N日` / `下个月N号` etc.
     let a = try_absolute_date_loose(left)
@@ -1265,6 +1482,9 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         .or_else(|| try_limit_month_day(left, now))
         .or_else(|| try_relative_year_month_day(left, now))
         .or_else(|| try_named_period(left, now))
+        .or_else(|| try_named_weekday(left, now))
+        .or_else(|| try_named_week_weekday(left, now))
+        .or_else(|| try_standalone_weekday(left, now))
         .or_else(|| try_relative_day(left, now))
         .or_else(|| try_fixed_holiday(left, now))
         .or_else(|| try_limit_year_festival(left, now))?;
@@ -1322,6 +1542,12 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         t
     } else if let Some(t) = try_relative_day(right, now) {
         t
+    } else if let Some(t) = try_named_weekday(right, now) {
+        t
+    } else if let Some(t) = try_named_week_weekday(right, now) {
+        t
+    } else if let Some(t) = try_standalone_weekday(right, now) {
+        t
     } else if let Some(t) = try_limit_year_festival(right, now) {
         t
     } else {
@@ -1332,11 +1558,7 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         let lhs_now = NaiveDate::from_ymd_opt(a.start.year(), 1, 1)
             .and_then(|d| d.and_hms_opt(0, 0, 0))
             .unwrap_or(now);
-        if let Some(t) = try_fixed_holiday(right, lhs_now) {
-            t
-        } else {
-            return None;
-        }
+        try_fixed_holiday(right, lhs_now)?
     };
     // Guard: right must come after or equal left.
     if b.end < a.start {
@@ -1363,6 +1585,13 @@ fn try_date_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         }
     } else {
         b.end
+    };
+    // Apply `24时` day-shift on RHS: set end to midnight of next day.
+    let end = if right_day_shift {
+        let nd = end.date() + Duration::days(1);
+        nd.and_hms_opt(0, 0, 0).unwrap_or(end)
+    } else {
+        end
     };
 
     Some(TimeInfo {
@@ -1465,7 +1694,6 @@ fn try_time_delta(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
 
     // Split off the unit character from the body's tail.
     const UNITS: &[(&str, DeltaUnit)] = &[
-        ("半小时", DeltaUnit::HalfHour),
         ("个季度", DeltaUnit::Quarter),
         ("季度", DeltaUnit::Quarter),
         ("个小时", DeltaUnit::Hour),
@@ -1486,26 +1714,71 @@ fn try_time_delta(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         ("秒", DeltaUnit::Second),
     ];
 
-    let mut num_body: Option<&str> = None;
+    // Candidate (body, plus_half) variants in fallback order.
+    let stripped_infix_half = body
+        .replace("个半小时", "个小时")
+        .replace("个半钟头", "个钟头")
+        .replace("个半月", "个月")
+        .replace("半小时", "小时")
+        .replace("半钟头", "钟头")
+        .replace("半分钟", "分钟")
+        .replace("分半钟", "分钟")
+        .replace("天半", "天")
+        .replace("日半", "日")
+        .replace("月半", "月")
+        .replace("年半", "年");
+    // Handle `多`/`余` markers (Python blur modifiers that don't change count).
+    // Both pre-unit ("3多年") and post-unit ("3年多") placements.
+    let stripped_more = body
+        .replace("个多月", "个月")
+        .replace("个余月", "个月")
+        .replace("多年", "年")
+        .replace("余年", "年")
+        .replace("多天", "天")
+        .replace("余天", "天")
+        .replace("多日", "日")
+        .replace("余日", "日")
+        .replace("多小时", "小时")
+        .replace("多分钟", "分钟")
+        .replace("多秒", "秒");
+    let try_bodies: Vec<(String, bool)> = vec![
+        (body.to_string(), false),
+        (body.strip_suffix('半').unwrap_or("").to_string(), true),
+        (stripped_infix_half.clone(), stripped_infix_half != body),
+        (stripped_more.clone(), false),
+    ];
+    // For each candidate, try matching a UNIT and parsing the count.
+    // Accept only when both succeed (otherwise fall through to next variant).
+    let mut num_body: Option<String> = None;
     let mut matched_unit: Option<DeltaUnit> = None;
     let mut plus_half: bool = false;
-    // Try `body` then `body - 半` so `3年半` matches as count=3 unit=year
-    // with plus_half=true.
-    let try_bodies: [&str; 2] = [body, body.strip_suffix('半').unwrap_or("")];
-    'outer: for (i, try_body) in try_bodies.iter().enumerate() {
+    'outer: for (try_body, ph) in try_bodies.iter() {
         if try_body.is_empty() {
             continue;
         }
         for (suffix, unit) in UNITS {
             if let Some(rest) = try_body.strip_suffix(suffix) {
-                num_body = Some(rest);
-                matched_unit = Some(*unit);
-                plus_half = i == 1;
-                break 'outer;
+                let rest_trim = rest
+                    .trim_end_matches('个')
+                    .trim_end_matches(['多', '余'])
+                    .trim();
+                // Accept if rest is parseable as a count (or special `半`/empty).
+                let parseable = rest_trim == "半"
+                    || rest_trim.is_empty()
+                    || rest_trim.parse::<f64>().is_ok()
+                    || parse_count(rest_trim).is_some()
+                    || parse_chinese_number(rest_trim).is_some();
+                if parseable {
+                    num_body = Some(rest.to_string());
+                    matched_unit = Some(*unit);
+                    plus_half = *ph;
+                    break 'outer;
+                }
             }
         }
     }
-    let num_body = num_body?.trim_end_matches('个').trim();
+    let nb_s = num_body?;
+    let num_body = nb_s.trim_end_matches('个').trim().to_string();
     let unit = matched_unit?;
 
     // HalfHour already represents "half of an hour" — the implicit count
@@ -1513,28 +1786,158 @@ fn try_time_delta(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     // base.
     let base_count: f64 = if matches!(unit, DeltaUnit::HalfHour) {
         1.0
+    } else if num_body == "半" {
+        // `半年`, `半月`, `半天`, `半周`: count = 0.5.
+        0.5
+    } else if num_body.is_empty() {
+        return None;
     } else {
-        parse_count(num_body)?
+        // `多` / `余` postfix (`三个多月` / `3年余`) is a blur marker
+        // Python keeps as 0.0 extra — skip for count, handle in definition.
+        let body = num_body.trim_end_matches(['多', '余']);
+        parse_count(body)?
     };
     let count = base_count + if plus_half { 0.5 } else { 0.0 };
 
-    let result = apply_delta(now, count * direction as f64, unit)?;
-    // Year-unit bare `前/后` → time_span covering the target year (Python
-    // parity with pattern #22 `32年前`).
-    let year_span_bare = !is_span && matches!(unit, DeltaUnit::Year);
-    if year_span_bare {
-        let target_year = now.year() + (count as i32) * direction as i32;
-        let first = NaiveDate::from_ymd_opt(target_year, 1, 1)?;
-        let last = NaiveDate::from_ymd_opt(target_year, 12, 31)?;
+    // Use day-based subtraction for Year/Month so fractional counts
+    // produce a concrete datetime (matching Python's dpy=365 and 30.417
+    // approximations).
+    let result = if matches!(unit, DeltaUnit::Year) {
+        let days = count * 365.0 * direction as f64;
+        now + Duration::milliseconds((days * 86_400_000.0) as i64)
+    } else if matches!(unit, DeltaUnit::Month) {
+        let days = count * 30.417 * direction as f64;
+        now + Duration::milliseconds((days * 86_400_000.0) as i64)
+    } else {
+        apply_delta(now, count * direction as f64, unit)?
+    };
+    // Year/Month bare `前/后`: Python produces a year-wide span for
+    // integer counts (handler precision = year) and a month-wide span
+    // for fractional counts (handler precision = year+month).
+    let is_fractional = (count - count.trunc()).abs() > 1e-9;
+    fn month_span(y: i32, m: u32) -> Option<(NaiveDateTime, NaiveDateTime)> {
+        date_range(y, Some(m), None)
+    }
+    if !is_span && matches!(unit, DeltaUnit::Year) {
+        if is_fractional {
+            let (s, e) = month_span(result.year(), result.month())?;
+            return Some(TimeInfo {
+                time_type: "time_span",
+                start: s,
+                end: e,
+                definition: "blur",
+                ..Default::default()
+            });
+        } else {
+            let target_year = now.year() + (count as i32) * direction as i32;
+            let first = NaiveDate::from_ymd_opt(target_year, 1, 1)?;
+            let last = NaiveDate::from_ymd_opt(target_year, 12, 31)?;
+            return Some(TimeInfo {
+                time_type: "time_span",
+                start: first.and_hms_opt(0, 0, 0)?,
+                end: last.and_hms_opt(23, 59, 59)?,
+                definition: "blur",
+                ..Default::default()
+            });
+        }
+    }
+    if !is_span && matches!(unit, DeltaUnit::Quarter) {
+        // Python month_delta with count*3: [cur_month, cur_month] span.
+        let (s, e) = date_range(result.year(), Some(result.month()), None)?;
         return Some(TimeInfo {
             time_type: "time_span",
-            start: first.and_hms_opt(0, 0, 0)?,
-            end: last.and_hms_opt(23, 59, 59)?,
+            start: s,
+            end: e,
             definition: "blur",
             ..Default::default()
         });
     }
+    if !is_span && matches!(unit, DeltaUnit::Month) {
+        // Python's month_delta_point: for integer count, the output spans
+        // [cur-1mo, cur] in month precision. For non-integer, day
+        // precision: [cur-30.417d, cur].
+        let dpm = 30.417_f64;
+        if is_fractional {
+            // Non-integer: day precision window of 30.417d.
+            let other_side = if direction > 0 {
+                result + Duration::milliseconds((dpm * 86_400_000.0) as i64)
+            } else {
+                result - Duration::milliseconds((dpm * 86_400_000.0) as i64)
+            };
+            let (s_date, e_date) = if direction > 0 {
+                (result.date(), other_side.date())
+            } else {
+                (other_side.date(), result.date())
+            };
+            return Some(TimeInfo {
+                time_type: "time_span",
+                start: s_date.and_hms_opt(0, 0, 0)?,
+                end: e_date.and_hms_opt(23, 59, 59)?,
+                definition: "blur",
+                ..Default::default()
+            });
+        } else {
+            // Integer: month precision, span of 2 months (cur and cur±1).
+            let other_side = if direction > 0 {
+                result + Duration::milliseconds((dpm * 86_400_000.0) as i64)
+            } else {
+                result - Duration::milliseconds((dpm * 86_400_000.0) as i64)
+            };
+            let (s_y, s_m, e_y, e_m) = if direction > 0 {
+                (
+                    result.year(),
+                    result.month(),
+                    other_side.year(),
+                    other_side.month(),
+                )
+            } else {
+                (
+                    other_side.year(),
+                    other_side.month(),
+                    result.year(),
+                    result.month(),
+                )
+            };
+            let (s, _) = date_range(s_y, Some(s_m), None)?;
+            let (_, e) = date_range(e_y, Some(e_m), None)?;
+            return Some(TimeInfo {
+                time_type: "time_span",
+                start: s,
+                end: e,
+                definition: "blur",
+                ..Default::default()
+            });
+        }
+    }
     if is_span {
+        // Python parity: `N周之后` / `N个星期之后` are interpreted the
+        // same as the bare `N周后` form — a whole week window at the
+        // target date, not an open span from now.
+        if matches!(unit, DeltaUnit::Week) {
+            let d = result.date();
+            let d_end = d + chrono::Duration::days(6);
+            return Some(TimeInfo {
+                time_type: "time_point",
+                start: d.and_hms_opt(0, 0, 0)?,
+                end: d_end.and_hms_opt(23, 59, 59)?,
+                definition: "accurate",
+                ..Default::default()
+            });
+        }
+        // Python month/year delta + 之后: open-ended span from start-of-
+        // period (month for Month unit, year for Year unit).
+        if matches!(unit, DeltaUnit::Month) && direction > 0 {
+            let sentinel_far = NaiveDate::from_ymd_opt(9999, 12, 31)?.and_hms_opt(23, 59, 59)?;
+            let start =
+                NaiveDate::from_ymd_opt(result.year(), result.month(), 1)?.and_hms_opt(0, 0, 0)?;
+            return Some(TimeInfo {
+                time_type: "time_span",
+                start,
+                end: sentinel_far,
+                definition: "blur",
+                ..Default::default()
+            });
+        }
         let (start, end) = if direction > 0 {
             (now, result)
         } else {
@@ -1548,10 +1951,96 @@ fn try_time_delta(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
             ..Default::default()
         })
     } else {
+        // Python-parity window around `result` based on unit and direction.
+        // When count == 0.5 exactly (`半小时`), the `+1 delta` step is also
+        // scaled by 0.5 (so end = result + 0.5 unit). For count >= 1 or
+        // fractional counts with plus_half, Python uses 1-unit step.
+        let delta_sec: i64 = match unit {
+            DeltaUnit::HalfHour => 1800,
+            DeltaUnit::Quarter15 => {
+                // `一刻钟` = 15 min. Python treats as quarter-hour point:
+                // second = cur + 15 min (same as count*15min)? Actually
+                // Python has no dedicated quarter-hour path; it treats
+                // `刻钟` as 15 minutes of minute-delta. End = cur + 15min.
+                900
+            }
+            DeltaUnit::Hour => {
+                if (count - 0.5).abs() < 1e-9 {
+                    1800
+                } else {
+                    3600
+                }
+            }
+            DeltaUnit::Minute => {
+                if (count - 0.5).abs() < 1e-9 {
+                    30
+                } else {
+                    60
+                }
+            }
+            DeltaUnit::Second => 1,
+            _ => 0,
+        };
+        let plus_delta = |dt: NaiveDateTime, sign: i64| -> NaiveDateTime {
+            dt + Duration::seconds(sign * delta_sec)
+        };
+        let (start, end) = match unit {
+            DeltaUnit::Day => {
+                let d = result.date();
+                (
+                    d.and_hms_opt(0, 0, 0).unwrap_or(result),
+                    d.and_hms_opt(23, 59, 59).unwrap_or(result),
+                )
+            }
+            DeltaUnit::Week => {
+                let d = result.date();
+                let d_end = d + chrono::Duration::days(6);
+                (
+                    d.and_hms_opt(0, 0, 0).unwrap_or(result),
+                    d_end.and_hms_opt(23, 59, 59).unwrap_or(result),
+                )
+            }
+            DeltaUnit::Hour | DeltaUnit::HalfHour => {
+                if direction > 0 {
+                    // `后`: start = result exact, end = result + 1 delta with sec=59.
+                    let e_raw = plus_delta(result, 1);
+                    let e = e_raw.with_second(59).unwrap_or(e_raw);
+                    (result, e)
+                } else {
+                    // `前`: start = result - 1 delta with sec=0, end = result exact.
+                    let s_raw = plus_delta(result, -1);
+                    let s = s_raw.with_second(0).unwrap_or(s_raw);
+                    (s, result)
+                }
+            }
+            DeltaUnit::Quarter15 => {
+                // Python quarter_delta_point keeps seconds exact on both ends.
+                if direction > 0 {
+                    (result, plus_delta(result, 1))
+                } else {
+                    (plus_delta(result, -1), result)
+                }
+            }
+            DeltaUnit::Minute => {
+                if direction > 0 {
+                    (result, plus_delta(result, 1))
+                } else {
+                    (plus_delta(result, -1), result)
+                }
+            }
+            DeltaUnit::Second => {
+                if direction > 0 {
+                    (result, plus_delta(result, 1))
+                } else {
+                    (plus_delta(result, -1), result)
+                }
+            }
+            _ => (result, result),
+        };
         Some(TimeInfo {
             time_type: "time_point",
-            start: result,
-            end: result,
+            start,
+            end,
             definition: "accurate",
             ..Default::default()
         })
@@ -1559,6 +2048,7 @@ fn try_time_delta(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 enum DeltaUnit {
     Second,
     Minute,
@@ -1856,8 +2346,51 @@ fn try_clock_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
             {
                 continue;
             }
+            // Reject when left or right looks like `Y.M.D` or `Y-M-D`
+            // (year-prefixed date), to avoid mis-parsing the leading
+            // digits as an hour.
+            let has_ymd_shape = |s: &str| -> bool {
+                static RE: Lazy<Regex> =
+                    Lazy::new(|| Regex::new(r"\d{4}[\-./]\d{1,2}[\-./]\d{1,2}").unwrap());
+                RE.is_match(s)
+            };
+            if has_ymd_shape(left) || has_ymd_shape(right) {
+                continue;
+            }
             let has_clock_marker =
                 |s: &str| s.contains('点') || s.contains('时') || s.contains(':');
+            // Period-of-day on both sides (e.g. `夜间至次日上午`) — use
+            // the window endpoints as clocks.
+            let left_is_period = bare_period_window(left).is_some();
+            let right_period_src = right
+                .strip_prefix("次日")
+                .or_else(|| right.strip_prefix("次天"))
+                .or_else(|| right.strip_prefix("翌日"))
+                .or_else(|| right.strip_prefix("明日"))
+                .or_else(|| right.strip_prefix("第二天"))
+                .unwrap_or(right);
+            let right_is_period = bare_period_window(right_period_src).is_some();
+            if left_is_period && right_is_period {
+                let (l_s, _l_e) = bare_period_window(left)?;
+                let (_r_s, r_e) = bare_period_window(right_period_src)?;
+                let end_day = if right_has_day_cross {
+                    base_day + Duration::days(1)
+                } else {
+                    base_day
+                };
+                let start = base_day.and_hms_opt(l_s, 0, 0)?;
+                let end = end_day.and_hms_opt(r_e, 59, 59)?;
+                if end < start {
+                    continue;
+                }
+                return Some(TimeInfo {
+                    time_type: "time_span",
+                    start,
+                    end,
+                    definition: "accurate",
+                    ..Default::default()
+                });
+            }
             if !has_clock_marker(left) && !has_clock_marker(right) {
                 continue;
             }
@@ -1885,11 +2418,20 @@ fn try_clock_range(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
             let start = base_day.and_time(left_clock);
             // `次日` / `次天` / `翌日` / `明日` / `第二天` on the right
             // means the range crosses midnight — shift end one day.
+            // Also: if right_clock is chronologically before left_clock
+            // (e.g. `11点到12点` where 12点 after normalization means
+            // midnight next day), bump the day.
             let right_cross_midnight = right.starts_with("次日")
                 || right.starts_with("次天")
                 || right.starts_with("翌日")
                 || right.starts_with("明日")
-                || right.starts_with("第二天");
+                || right.starts_with("第二天")
+                || (right_clock < left_clock
+                    && (right.contains("晚上")
+                        || right.contains("夜里")
+                        || right.contains("半夜")
+                        || right.contains("午夜"))
+                    && (right.contains("12") || right.contains("十二")));
             let end_day = if right_cross_midnight {
                 base_day + Duration::days(1)
             } else {
@@ -1961,6 +2503,77 @@ fn extract_date_prefix(text: &str, now: NaiveDateTime) -> (NaiveDate, &str) {
     for (kw, offset) in DAYS {
         if let Some(rest) = text.strip_prefix(*kw) {
             return (now.date() + Duration::days(*offset), rest);
+        }
+    }
+    // Bare `\d{1,2}(日|号)` prefix (no month) — current month's day.
+    static BARE_DAY: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d{1,2})(日|号)").unwrap());
+    if let Some(caps) = BARE_DAY.captures(text) {
+        if let Some(m) = caps.get(1) {
+            if let Ok(d) = m.as_str().parse::<u32>() {
+                if let Some(date) = NaiveDate::from_ymd_opt(now.year(), now.month(), d) {
+                    let rest = &text[caps.get(0).unwrap().end()..];
+                    return (date, rest);
+                }
+            }
+        }
+    }
+    // MM/DD or MM-DD prefix (no year) — e.g. `11/3号早上`.
+    static MD_SEP: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^(\d{1,2})[/\-\.](\d{1,2})(日|号)?").unwrap());
+    if let Some(caps) = MD_SEP.captures(text) {
+        if let (Some(mm), Some(dd)) = (caps.get(1), caps.get(2)) {
+            if let (Ok(m), Ok(d)) = (mm.as_str().parse::<u32>(), dd.as_str().parse::<u32>()) {
+                if (1..=12).contains(&m) && (1..=31).contains(&d) {
+                    if let Some(date) = NaiveDate::from_ymd_opt(now.year(), m, d) {
+                        let rest = &text[caps.get(0).unwrap().end()..];
+                        return (date, rest);
+                    }
+                }
+            }
+        }
+    }
+    // Bare `\d{1,2}月\d{1,2}(日|号)?` prefix (no year) — current year.
+    static MD: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d{1,2})月(\d{1,2})(日|号)?").unwrap());
+    if let Some(caps) = MD.captures(text) {
+        if let (Some(mm), Some(dd)) = (caps.get(1), caps.get(2)) {
+            if let (Ok(m), Ok(d)) = (mm.as_str().parse::<u32>(), dd.as_str().parse::<u32>()) {
+                if let Some(date) = NaiveDate::from_ymd_opt(now.year(), m, d) {
+                    let rest = &text[caps.get(0).unwrap().end()..];
+                    return (date, rest);
+                }
+            }
+        }
+    }
+    // Limit-month + day prefix (`下个月9号`, `本月15日`).
+    const MONTH_PREFS: &[(&str, i32)] = &[
+        ("下个月", 1),
+        ("下一个月", 1),
+        ("下月", 1),
+        ("上个月", -1),
+        ("上一个月", -1),
+        ("上月", -1),
+        ("本月", 0),
+        ("这个月", 0),
+        ("这月", 0),
+    ];
+    for (pref, off) in MONTH_PREFS {
+        if let Some(rest) = text.strip_prefix(*pref) {
+            let rest = rest.trim_start_matches(['的', ' ']);
+            if let Some((day, tail)) = parse_day_token(rest) {
+                let mut y = now.year();
+                let mut m = now.month() as i32 + off;
+                while m <= 0 {
+                    m += 12;
+                    y -= 1;
+                }
+                while m > 12 {
+                    m -= 12;
+                    y += 1;
+                }
+                if let Some(date) = NaiveDate::from_ymd_opt(y, m as u32, day) {
+                    return (date, tail);
+                }
+            }
         }
     }
     (now.date(), text)
@@ -2143,6 +2756,9 @@ fn next_day_of_month(from: NaiveDate, day: u32) -> Option<NaiveDate> {
 }
 
 fn try_clock_only(text: &str, today: NaiveDate) -> Option<TimeInfo> {
+    // Normalize full-width colon before parsing.
+    let text_owned = text.replace('：', ":");
+    let text = text_owned.as_str();
     // If `text` is *only* a clock expression (no leading year/day), parse it
     // as today's clock. We guard with a quick reject for strings that begin
     // with purely Hanzi that isn't a period marker.
@@ -2169,11 +2785,50 @@ fn try_clock_only(text: &str, today: NaiveDate) -> Option<TimeInfo> {
     {
         return None;
     }
-    let dt = today.and_time(clock);
+    // Day-shift: `夜里/晚上/半夜 12点` conventionally means midnight
+    // of the NEXT day. Detect and shift.
+    let needs_day_shift = (text.contains("夜里") || text.contains("晚上") || text.contains("半夜"))
+        && (text.contains("12点") || text.contains("十二点"));
+    let anchor_day = if needs_day_shift {
+        today + Duration::days(1)
+    } else {
+        today
+    };
+    let dt = anchor_day.and_time(clock);
+    // Precision-aware end window (matches apply_optional_clock).
+    // Check against the ORIGINAL text rather than the suffix-stripped
+    // `normalized`, so `点半` / `点一刻` markers we stripped still count.
+    let has_second = text.contains('秒') || text.matches(':').count() >= 2;
+    let has_minute = !has_second
+        && (text.contains('分')
+            || text.contains(':')
+            || text.contains("点半")
+            || text.contains("时半")
+            || text.contains("一刻")
+            || text.contains("二刻")
+            || text.contains("两刻")
+            || text.contains("三刻")
+            // 点 followed by Chinese digit without 分 marker (`九点零九`).
+            || cn_normalize_clock(text)
+                .split('点')
+                .nth(1)
+                .is_some_and(|tail| {
+                    let t = tail.trim_start_matches("钟");
+                    t.chars().next().is_some_and(|c| c.is_ascii_digit())
+                }));
+    let end = if has_second {
+        dt
+    } else if has_minute {
+        dt.with_second(59).unwrap_or(dt)
+    } else {
+        dt.with_minute(59)
+            .and_then(|t| t.with_second(59))
+            .unwrap_or(dt)
+    };
     Some(TimeInfo {
         time_type: "time_point",
         start: dt,
-        end: dt,
+        end,
         definition: "accurate",
         ..Default::default()
     })
@@ -2219,6 +2874,9 @@ fn cn_int(s: &str) -> Option<u32> {
             Some(10 + u)
         }
         ['十'] => Some(10),
+        // `零N` / `〇N` → 0N (e.g. minute `零九` = 9). Leading-zero
+        // two-digit form.
+        ['零' | '〇', a] => digit(*a),
         // `廿`/`念` (both = 20), `卅`/`丗` (30), optionally + ones digit.
         ['廿' | '念', b] => {
             let u = digit(*b)?;
@@ -2573,11 +3231,10 @@ fn try_delta_range_suffix(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         return None;
     }
     let delta = inner.delta?;
-    // Only handle year/month here — day/hour spans are tiny and less
-    // commonly requested in this shape.
+    // Only handle year ranges here — `几十年之后` / `二十几年前`. Single
+    // values (incl. fractional like 半年) belong to try_time_delta.
     let (lo_years, hi_years) = match delta.year {
         Some(DeltaValue::Range(lo, hi)) => (lo, hi),
-        Some(DeltaValue::Single(n)) => (n, n),
         _ => return None,
     };
     if lo_years.is_sign_negative() || hi_years.is_sign_negative() {
@@ -2742,10 +3399,8 @@ fn try_span_to_now(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     // it as "from X to now".
     let left = if let Some(left) = matched {
         left
-    } else if let Some(left) = body.strip_suffix('起') {
-        left
     } else {
-        return None;
+        body.strip_suffix('起')?
     };
     let left = left.trim();
     if left.is_empty() {
@@ -2814,6 +3469,7 @@ fn try_month_xun(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         "中旬" => (11u32, Xun::UpperFixed(20)),
         "下旬" => (21u32, Xun::ToEom),
         "月底" | "底" => (0u32, Xun::Last5),
+        "初" | "月初" => (1u32, Xun::UpperFixed(5)),
         _ => return None,
     };
     // Compute last day of that month.
@@ -2826,7 +3482,8 @@ fn try_month_xun(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     let (from_day, to_day) = match (from_day, to_day_kind) {
         (_, Xun::UpperFixed(d)) => (from_day, d.min(total)),
         (_, Xun::ToEom) => (from_day, total),
-        (_, Xun::Last5) => (total.saturating_sub(4).max(25), total),
+        // Python's `月底` covers days 25..end inclusive (a 7-day tail).
+        (_, Xun::Last5) => (total.saturating_sub(6).max(25), total),
     };
     let from = NaiveDate::from_ymd_opt(year, month, from_day)?;
     let to = NaiveDate::from_ymd_opt(year, month, to_day)?;
@@ -2970,6 +3627,37 @@ fn try_relative_year_month_day(text: &str, now: NaiveDateTime) -> Option<TimeInf
             definition: "accurate",
             ..Default::default()
         });
+    }
+    // Python routes `<相对年>M月<CN-day>` without 日/号 marker to the
+    // lunar path (廿N / 十五 / 二十九 are definitively lunar day forms
+    // when no Gregorian marker is present). Reject here so try_lunar_date
+    // can claim it.
+    let rest_trim = rest.trim_start();
+    let first_char = rest_trim.chars().next();
+    let is_cn_day_start = first_char.is_some_and(|c| {
+        matches!(
+            c,
+            '零' | '〇'
+                | '一'
+                | '二'
+                | '两'
+                | '三'
+                | '四'
+                | '五'
+                | '六'
+                | '七'
+                | '八'
+                | '九'
+                | '十'
+                | '廿'
+                | '念'
+                | '卅'
+                | '丗'
+                | '初'
+        )
+    });
+    if is_cn_day_start && !rest_trim.contains('日') && !rest_trim.contains('号') {
+        return None;
     }
     // Expect day (+ optional clock + optional 左右 modifier).
     let (day, after_day) = parse_day_token(rest)?;
@@ -3181,7 +3869,7 @@ fn try_month_week_ordinal(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
 /// Strip an optional year prefix (`2024年`, `二零二四年`, `今年`, `去年` …)
 /// and return `(resolved_year, rest_after_year)`. When no prefix is
 /// present, returns `(now.year(), text)` so the caller can still proceed.
-fn resolve_optional_year_prefix<'a>(text: &'a str, now: NaiveDateTime) -> Option<(i32, &'a str)> {
+fn resolve_optional_year_prefix(text: &str, now: NaiveDateTime) -> Option<(i32, &str)> {
     // Relative-year prefix (longest match).
     const REL: &[(&str, i32)] = &[
         ("大前年", -3),
@@ -3229,7 +3917,7 @@ fn resolve_optional_year_prefix<'a>(text: &'a str, now: NaiveDateTime) -> Option
 /// Resolve `本月` / `上个月` / `下月` / `当月` etc. returning `(month_1_12,
 /// rest_after_month)` inheriting year from `now`. Returns None if there
 /// is no limit-month prefix; use `parse_month_token` for literal `M月`.
-fn try_resolve_limit_month<'a>(text: &'a str, now: NaiveDateTime) -> Option<(u32, &'a str)> {
+fn try_resolve_limit_month(text: &str, now: NaiveDateTime) -> Option<(u32, &str)> {
     const MONTH_PREF: &[(&str, i32)] = &[
         ("本月", 0),
         ("当月", 0),
@@ -3409,7 +4097,17 @@ fn try_limit_month_day(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     let (start, end) = date_range(y, Some(m as u32), Some(day))?;
     // Tail may be empty (bare day) or a clock expression
     // (`下月15号下午6点`) — apply_optional_clock handles both.
-    apply_optional_clock(start, end, tail.trim())
+    // Reject when tail contains a range separator so the span-level
+    // parsers (try_clock_range / try_date_range) can take over.
+    let tail_trim = tail.trim();
+    if tail_trim.contains('到')
+        || tail_trim.contains('至')
+        || tail_trim.contains('~')
+        || tail_trim.contains('～')
+    {
+        return None;
+    }
+    apply_optional_clock(start, end, tail_trim)
 }
 
 /// Same as `try_bare_month_day` but uses a caller-supplied year (for
@@ -3419,6 +4117,27 @@ fn try_bare_month_day_with_year(text: &str, year: i32, _now: NaiveDateTime) -> O
         if let Some((day, tail)) = parse_day_token(rest) {
             let (start, end) = date_range(year, Some(month), Some(day))?;
             return apply_optional_clock(start, end, tail.trim());
+        }
+    }
+    // Accept `MM-DD` / `MM/DD` / `MM.DD` with optional clock tail.
+    static MD_SEP: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^(\d{1,2})[\-/\.](\d{1,2})(.*)$").unwrap());
+    if let Some(caps) = MD_SEP.captures(text) {
+        let month: u32 = caps.get(1)?.as_str().parse().ok()?;
+        let day: u32 = caps.get(2)?.as_str().parse().ok()?;
+        if (1..=12).contains(&month) && (1..=31).contains(&day) {
+            let (start, end) = date_range(year, Some(month), Some(day))?;
+            let tail = caps.get(3).map(|m| m.as_str()).unwrap_or("").trim();
+            if tail.is_empty() {
+                return Some(TimeInfo {
+                    time_type: "time_point",
+                    start,
+                    end,
+                    definition: "accurate",
+                    ..Default::default()
+                });
+            }
+            return apply_optional_clock(start, end, tail);
         }
     }
     None
@@ -3451,20 +4170,46 @@ fn try_bare_month_day(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         }
     }
     // `09-01` / `9/1` / `09.01` — MM-DD with ASCII separator, no year.
-    // Optional clock tail. Must distinguish from HH:MM (4+ digits with
-    // colon), hence require the separator NOT to be `:` and require a
-    // space before the clock tail when present.
-    static MD_DASH: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"^(\d{1,2})[\-/\.](\d{1,2})(\s+.+|[\-\s]*\d{1,2}[:：].*)?$").unwrap()
-    });
+    // Optional clock tail. Accept `\s+` / `:` / `号` / `日` / Chinese
+    // period qualifier as permissible prefix to the tail.
+    static MD_DASH: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^(\d{1,2})[\-/\.](\d{1,2})(.*)$").unwrap());
     if let Some(caps) = MD_DASH.captures(text) {
         let month: u32 = caps.get(1)?.as_str().parse().ok()?;
         let day: u32 = caps.get(2)?.as_str().parse().ok()?;
         if (1..=12).contains(&month) && (1..=31).contains(&day) {
             let year = now.year();
             let (start, end) = date_range(year, Some(month), Some(day))?;
-            let tail = caps.get(3).map(|m| m.as_str()).unwrap_or("");
-            return apply_optional_clock(start, end, tail.trim());
+            let tail_raw = caps.get(3).map(|m| m.as_str()).unwrap_or("").trim();
+            // Reject if tail starts with a `:` (likely HH:MM clock) or
+            // digits (likely MM-DD-YY or date range); only allow
+            // period/clock qualifiers or 日/号 markers.
+            if tail_raw.is_empty() {
+                return Some(TimeInfo {
+                    time_type: "time_point",
+                    start,
+                    end,
+                    definition: "accurate",
+                    ..Default::default()
+                });
+            }
+            // Strip leading 日/号 (e.g. `11/3号早上` → tail `号早上` → `早上`).
+            let tail = tail_raw
+                .strip_prefix('日')
+                .or_else(|| tail_raw.strip_prefix('号'))
+                .unwrap_or(tail_raw)
+                .trim();
+            if tail.is_empty() {
+                return Some(TimeInfo {
+                    time_type: "time_point",
+                    start,
+                    end,
+                    definition: "accurate",
+                    ..Default::default()
+                });
+            }
+            // Apply clock/period tail if any.
+            return apply_optional_clock(start, end, tail);
         }
     }
 
@@ -3494,12 +4239,21 @@ fn try_bare_month_day(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
 /// year and month from `now`.
 fn try_bare_day_with_clock(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     let (day, rest) = parse_day_token(text)?;
-    // Must be strictly day+clock — no empty tail, no month/year markers.
+    // Must be strictly day+clock — no empty tail, no month/year markers,
+    // no range separators (those belong to try_clock_range/try_date_range).
     let rest = rest.trim();
     if rest.is_empty() {
         return None;
     }
-    if rest.contains('月') || rest.contains('年') {
+    if rest.contains('月') || rest.contains('年') || rest.contains('号') {
+        return None;
+    }
+    if rest.contains('到') || rest.contains('至') || rest.contains('~') || rest.contains('～') {
+        return None;
+    }
+    // Reject date-separator prefixes so `11/3号早上` isn't mis-read as
+    // day=11 + hour=3.
+    if rest.starts_with('/') || rest.starts_with('-') || rest.starts_with('.') {
         return None;
     }
     let (year, month) = (now.year(), now.month());
@@ -3870,6 +4624,18 @@ fn try_special_phrases(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
                 ..Default::default()
             })
         }
+        "今明两年" => {
+            let y = now.year();
+            let s = NaiveDate::from_ymd_opt(y, 1, 1)?.and_hms_opt(0, 0, 0)?;
+            let e = NaiveDate::from_ymd_opt(y + 1, 12, 31)?.and_hms_opt(23, 59, 59)?;
+            Some(TimeInfo {
+                time_type: "time_span",
+                start: s,
+                end: e,
+                definition: "accurate",
+                ..Default::default()
+            })
+        }
         "明后两天" => {
             let d0 = now.date() + Duration::days(1);
             let d1 = d0 + Duration::days(1);
@@ -4063,14 +4829,11 @@ fn try_nth_weekday_in_month(text: &str, now: NaiveDateTime) -> Option<TimeInfo> 
 /// current year.
 fn try_year_day_ordinal(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"^(?:(\d{2,4})\s*年\s*)?第\s*(\d+|[一二两三四五六七八九十百千]+)\s*天$")
+        Regex::new(r"^(?:(\d{2,4})\s*年\s*)?第\s*(\d+|[一二两三四五六七八九十百千]+)\s*天(.*)$")
             .unwrap()
     });
     let caps = RE.captures(text)?;
-    let year = match caps.get(1) {
-        Some(m) => parse_year(m.as_str())?,
-        None => now.year(),
-    };
+    let has_year = caps.get(1).is_some();
     let n_str = caps.get(2)?.as_str();
     let n: i32 = n_str
         .parse::<i32>()
@@ -4079,18 +4842,34 @@ fn try_year_day_ordinal(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if !(1..=366).contains(&n) {
         return None;
     }
-    let jan1 = NaiveDate::from_ymd_opt(year, 1, 1)?;
-    let d = jan1 + Duration::days((n - 1) as i64);
-    if d.year() != year {
-        return None;
+    // Without year prefix: `第N天` = today + N - 1 (Python's bare
+    // normalize_day_order_delta_point). With year prefix: Nth day of
+    // that year.
+    let d = if has_year {
+        let year = parse_year(caps.get(1)?.as_str())?;
+        let jan1 = NaiveDate::from_ymd_opt(year, 1, 1)?;
+        let d = jan1 + Duration::days((n - 1) as i64);
+        if d.year() != year {
+            return None;
+        }
+        d
+    } else {
+        now.date() + Duration::days((n - 1) as i64)
+    };
+    let tail = caps.get(3)?.as_str().trim();
+    let start = d.and_hms_opt(0, 0, 0)?;
+    let end = d.and_hms_opt(23, 59, 59)?;
+    if tail.is_empty() {
+        return Some(TimeInfo {
+            time_type: "time_point",
+            start,
+            end,
+            definition: "accurate",
+            ..Default::default()
+        });
     }
-    Some(TimeInfo {
-        time_type: "time_point",
-        start: d.and_hms_opt(0, 0, 0)?,
-        end: d.and_hms_opt(23, 59, 59)?,
-        definition: "accurate",
-        ..Default::default()
-    })
+    // Try to parse trailing as clock/period and narrow the window.
+    apply_optional_clock(start, end, tail)
 }
 
 /// Pattern #8 — `前两天 / 前三个月 / 前两年 / 前一周`.
@@ -4120,26 +4899,133 @@ fn try_super_blur_ymd(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if dir == "这" && n == 1 {
         return None;
     }
+    // Month/year/quarter with 未来/过去/近 use Python's normalize_weilai/
+    // guoqu_delta2span semantics (precision-aware end truncation).
+    // Delegate to try_delta_to_span; return None here so dispatch
+    // continues.
+    if matches!(dir, "未来" | "过去" | "近") && matches!(unit, "月" | "年" | "季度") {
+        return None;
+    }
+    // Python super_blur_two_ymd (dir="前" + n=2) uses a unique blur
+    // window: [now-7d, now-2d] for 天, [year-5, year-2] for 年, etc.
+    if dir == "前" && n == 2 {
+        let today = now.date();
+        match unit {
+            "天" | "日" => {
+                let s = today - Duration::days(7);
+                let e = today - Duration::days(2);
+                return Some(TimeInfo {
+                    time_type: "time_span",
+                    start: s.and_hms_opt(0, 0, 0)?,
+                    end: e.and_hms_opt(23, 59, 59)?,
+                    definition: "blur",
+                    ..Default::default()
+                });
+            }
+            "年" => {
+                let y_s = today.year() - 5;
+                let y_e = today.year() - 2;
+                return Some(TimeInfo {
+                    time_type: "time_span",
+                    start: NaiveDate::from_ymd_opt(y_s, 1, 1)?.and_hms_opt(0, 0, 0)?,
+                    end: NaiveDate::from_ymd_opt(y_e, 12, 31)?.and_hms_opt(23, 59, 59)?,
+                    definition: "blur",
+                    ..Default::default()
+                });
+            }
+            "月" => {
+                // Python uses 30.417 day window (~1 month) twice.
+                let s_dt = now - Duration::days((30.417_f64 * 2.0) as i64);
+                let e_dt = now - Duration::days(30.417_f64 as i64);
+                let (s_y, s_m) = (s_dt.year(), s_dt.month());
+                let (e_y, e_m) = (e_dt.year(), e_dt.month());
+                let s_first = NaiveDate::from_ymd_opt(s_y, s_m, 1)?;
+                let e_last = {
+                    let nxt = if e_m == 12 {
+                        NaiveDate::from_ymd_opt(e_y + 1, 1, 1)?
+                    } else {
+                        NaiveDate::from_ymd_opt(e_y, e_m + 1, 1)?
+                    };
+                    nxt.pred_opt()?
+                };
+                return Some(TimeInfo {
+                    time_type: "time_span",
+                    start: s_first.and_hms_opt(0, 0, 0)?,
+                    end: e_last.and_hms_opt(23, 59, 59)?,
+                    definition: "blur",
+                    ..Default::default()
+                });
+            }
+            "周" | "星期" => {
+                // `前两周` uses Python's blur_week (different path):
+                // start = Monday of (now - N*7d), end = now (exact).
+                let dt = now - Duration::days((n as i64) * 7);
+                let d = dt.date();
+                let wd = d.weekday().num_days_from_monday() as i64;
+                let monday = d - Duration::days(wd);
+                return Some(TimeInfo {
+                    time_type: "time_point",
+                    start: monday.and_hms_opt(0, 0, 0)?,
+                    end: now,
+                    definition: "blur",
+                    ..Default::default()
+                });
+            }
+            _ => {}
+        }
+    }
     let today = now.date();
+    // Width semantics:
+    //   `这N`: N-1 (so `这3天` = today + 2 days back, inclusive).
+    //   `近/过去/未来/前`: full N (Python `近30天` = now ± 30 days).
+    let width = if dir == "这" {
+        (n - 1) as i64
+    } else {
+        n as i64
+    };
+    // Preserve now's time for 近/过去/未来 so `近30天` → [now-30d, now].
+    let preserve_time = matches!(dir, "近" | "过去" | "未来");
     let (start, end) = match unit {
         "天" | "日" => {
-            let a = today + Duration::days(sign as i64 * (n - 1) as i64);
-            let b = today;
-            let (s, e) = if a <= b { (a, b) } else { (b, a) };
-            (s.and_hms_opt(0, 0, 0)?, e.and_hms_opt(23, 59, 59)?)
+            if preserve_time {
+                let a = now + Duration::days(sign as i64 * width);
+                let (s, e) = if a <= now { (a, now) } else { (now, a) };
+                (s, e)
+            } else {
+                let a = today + Duration::days(sign as i64 * width);
+                let b = today;
+                let (s, e) = if a <= b { (a, b) } else { (b, a) };
+                (s.and_hms_opt(0, 0, 0)?, e.and_hms_opt(23, 59, 59)?)
+            }
         }
         "周" | "星期" => {
-            let a = today + Duration::days(sign as i64 * (n * 7 - 1) as i64);
-            let b = today;
-            let (s, e) = if a <= b { (a, b) } else { (b, a) };
-            (s.and_hms_opt(0, 0, 0)?, e.and_hms_opt(23, 59, 59)?)
+            if preserve_time {
+                let a = now + Duration::days(sign as i64 * width * 7);
+                let (s, e) = if a <= now { (a, now) } else { (now, a) };
+                (s, e)
+            } else {
+                let a = today + Duration::days(sign as i64 * ((n * 7) - 1) as i64);
+                let b = today;
+                let (s, e) = if a <= b { (a, b) } else { (b, a) };
+                (s.and_hms_opt(0, 0, 0)?, e.and_hms_opt(23, 59, 59)?)
+            }
         }
         "月" => {
-            let a_dt = add_months(now, sign * (n - 1))?;
-            let a = a_dt.date();
-            let b = today;
-            let (s, e) = if a <= b { (a, b) } else { (b, a) };
-            (s.and_hms_opt(0, 0, 0)?, e.and_hms_opt(23, 59, 59)?)
+            if preserve_time {
+                let a_dt = add_months(now, sign * n)?;
+                let (s, e) = if a_dt <= now {
+                    (a_dt, now)
+                } else {
+                    (now, a_dt)
+                };
+                (s, e)
+            } else {
+                let a_dt = add_months(now, sign * (n - 1))?;
+                let a = a_dt.date();
+                let b = today;
+                let (s, e) = if a <= b { (a, b) } else { (b, a) };
+                (s.and_hms_opt(0, 0, 0)?, e.and_hms_opt(23, 59, 59)?)
+            }
         }
         "年" => {
             let a =
@@ -4563,13 +5449,49 @@ fn try_blur_hour_phrase(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
             let start = day.and_hms_opt(*s_hour, 0, 0)?;
             let end = day.and_hms_opt(*e_hour, 59, 59)?;
             return Some(TimeInfo {
-                time_type: "time_span",
+                time_type: "time_point",
                 start,
                 end,
-                definition: "blur",
+                definition: "accurate",
                 ..Default::default()
             });
         }
+    }
+    // Consecutive-hour blur (`七八点` / `下午七八点` / `明天下午七八点`).
+    // Peel an optional period qualifier, then match two cn-digits + `点`.
+    let mut period: Option<&str> = None;
+    let rest_after_period = {
+        let mut r = rest;
+        for (name, _, _) in BLUR_HOUR_MAP {
+            if let Some(x) = r.strip_prefix(*name) {
+                period = Some(*name);
+                r = x;
+                break;
+            }
+        }
+        r
+    };
+    // `<D1><D2>点` where D1 < D2 are consecutive single-digit cn numerals.
+    // Exclude `十` to avoid mis-reading `十一点` as `10..1`.
+    static CONSEC: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"^([一二两三四五六七八九])([一二两三四五六七八九])点(钟)?$").unwrap()
+    });
+    if let Some(caps) = CONSEC.captures(rest_after_period) {
+        let d1 = cn_int(caps.get(1)?.as_str())?;
+        let d2 = cn_int(caps.get(2)?.as_str())?;
+        let (h1, h2) = (
+            normalize_hour_by_period(d1, period),
+            normalize_hour_by_period(d2, period),
+        );
+        let start = day.and_hms_opt(h1, 0, 0)?;
+        let end = day.and_hms_opt(h2, 59, 59)?;
+        return Some(TimeInfo {
+            time_type: "time_span",
+            start,
+            end,
+            definition: "blur",
+            ..Default::default()
+        });
     }
     None
 }
@@ -4618,19 +5540,68 @@ fn try_super_blur_hms(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         "未来" => 1,
         _ => return None,
     };
+    // Python super_blur_two_hms: `前两小时` → [now-6h, now-2h] hour-precision;
+    // `前两分钟` → [now-9min, now-2min]; `前两秒` → [now-9s, now-2s].
+    if dir == "前" && n == 2 {
+        let (lo, hi, prec) = match unit {
+            "小时" | "钟头" => (6 * 3600, 2 * 3600, 4),
+            "分钟" => (9 * 60, 2 * 60, 5),
+            "秒" => (9, 2, 6),
+            _ => return None,
+        };
+        let s = now - Duration::seconds(lo);
+        let e = now - Duration::seconds(hi);
+        let s = truncate_datetime(s, prec, false);
+        let e = truncate_datetime(e, prec, true);
+        return Some(TimeInfo {
+            time_type: "time_span",
+            start: s,
+            end: e,
+            definition: "blur",
+            ..Default::default()
+        });
+    }
     let endpoint = now + Duration::seconds(seconds * sign);
+    // Python guoqu_delta2span keeps now as time_base_handler, with end fill
+    // based on time_base precision. Heuristic: if now.second()==0, fill :59.
+    let now_adj = if sign < 0 && now.second() == 0 {
+        now.with_second(59).unwrap_or(now)
+    } else {
+        now
+    };
     let (start, end) = if sign < 0 {
-        (endpoint, now)
+        (endpoint, now_adj)
     } else {
         (now, endpoint)
     };
+    // `过去N<unit>`, `最近N<unit>` etc. with sub-day unit: Python says
+    // accurate, not blur. But `近N<unit>` specifically stays blur.
+    let definition = if dir == "近" { "blur" } else { "accurate" };
     Some(TimeInfo {
         time_type: "time_span",
         start,
         end,
-        definition: "blur",
+        definition,
         ..Default::default()
     })
+}
+
+/// Truncate a NaiveDateTime to the given precision level, padding with
+/// zeros (for start) or maxes (for end). Precision 4=hour, 5=minute, 6=second.
+fn truncate_datetime(dt: NaiveDateTime, prec: u32, end_fill: bool) -> NaiveDateTime {
+    let (h, m, s) = (dt.hour(), dt.minute(), dt.second());
+    let (out_m, out_s) = match prec {
+        4 => {
+            if end_fill {
+                (59, 59)
+            } else {
+                (0, 0)
+            }
+        }
+        5 => (m, if end_fill { 59 } else { 0 }),
+        _ => (m, s),
+    };
+    dt.date().and_hms_opt(h, out_m, out_s).unwrap_or(dt)
 }
 
 /// Pattern #107, #108 — open-ended span: `X之后` / `X以后` / `X之前` /
@@ -4653,12 +5624,23 @@ fn try_open_ended_span(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         (false, b)
     } else if let Some(b) = text.strip_suffix('前') {
         // Bare `前` after year-boundary (`年初`, `年底` etc.), month-
-        // boundary (`8月初`, `本月底`), OR after a concrete
-        // `YYYY年` / `YYYY年M月` that resolves to a future point.
-        // Reject pure duration forms (`三年前` = 3 years ago).
+        // boundary (`8月初`, `本月底`), a concrete `YYYY年` /
+        // `YYYY年M月` that resolves to a future point, OR a clock
+        // (`下月15号下午6点前`). Reject pure duration forms
+        // (`三年前` = 3 years ago, `32年前` = 32 years ago).
         let last = b.chars().last()?;
         let is_boundary_suffix = matches!(last, '初' | '末' | '底' | '中' | '头' | '尾');
-        let is_concrete_year = (last == '年' || last == '月')
+        // Bare `\d{1,2}年` or pure Chinese-numeral `年` is always a delta.
+        let looks_like_delta = {
+            static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d{1,2}年$").unwrap());
+            RE.is_match(b) || {
+                static RE_CN: Lazy<Regex> =
+                    Lazy::new(|| Regex::new(r"^[一二两三四五六七八九十百千]+年$").unwrap());
+                RE_CN.is_match(b)
+            }
+        };
+        let is_concrete_year = !looks_like_delta
+            && matches!(last, '年' | '月' | '点' | '时' | '分' | '秒')
             && parse_time_with_ref(b, now)
                 .map(|t| t.start >= now)
                 .unwrap_or(false);
@@ -5037,50 +6019,194 @@ fn try_pure_delta(text: &str) -> Option<TimeInfo> {
 
 /// Pattern #58, #59, #60, #61 — `未来N<unit>` / `过去N<unit>` / `过N<unit>`
 /// / `再过N<unit>` / `最近N<unit>` as `time_span` from now.
+///
+/// Matches Python's `normalize_weilai_delta2span` / `normalize_guoqu_delta2span`
+/// / `normalize_guo_delta2span`. When the unit is month/year (no day/hour/etc),
+/// end is floored to the precision of time_base (day-level fill).
 fn try_delta_to_span(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
-    const PREFIXES: &[(&str, i64)] = &[
-        ("未来", 1),
-        ("将来", 1),
-        ("再过", 1),
-        ("过", 1),
-        ("过去", -1),
-        ("最近", -1),
-        ("近", -1),
+    #[derive(Clone, Copy, PartialEq)]
+    enum Kind {
+        Future,   // `未来` / `今后` / `将来`
+        PastBlur, // `过去(的)` / `近` (blur qualifier)
+        PastAcc,  // `最近` / `过去` without 的 still blur but close
+        GuoOpen,  // `过` / `再过` — open-ended future
+    }
+    // Longest prefix wins.
+    const PREFIXES: &[(&str, Kind)] = &[
+        ("未来", Kind::Future),
+        ("将来", Kind::Future),
+        ("今后", Kind::Future),
+        ("过去", Kind::PastBlur),
+        ("最近", Kind::PastAcc),
+        ("近", Kind::PastBlur),
+        ("再过", Kind::GuoOpen),
+        ("过", Kind::GuoOpen),
     ];
-    let mut matched: Option<(i64, &str)> = None;
-    for (p, sign) in PREFIXES {
+    let mut matched: Option<(Kind, &str)> = None;
+    for (p, k) in PREFIXES {
         if let Some(rest) = text.strip_prefix(*p) {
             match matched {
                 Some((_, r)) if r.len() < rest.len() => {}
-                _ => matched = Some((*sign, rest)),
+                _ => matched = Some((*k, rest)),
             }
         }
     }
-    let (sign, rest) = matched?;
-    let rest = rest.trim();
+    let (kind, rest) = matched?;
+    let rest = rest.trim_start_matches('的').trim();
+    // Optional trailing 内/里 for future/past span flavor.
+    let (rest, has_inner) = if let Some(r) = rest
+        .strip_suffix("之内")
+        .or_else(|| rest.strip_suffix("以内"))
+        .or_else(|| rest.strip_suffix('内'))
+        .or_else(|| rest.strip_suffix('里'))
+    {
+        (r.trim(), true)
+    } else {
+        (rest, false)
+    };
     // rest must be "N<unit>", optionally with 个.
     let (setter, body) = strip_delta_unit(rest)?;
     let body = body.trim_end_matches('个').trim();
-    let n: f64 = body
-        .parse::<f64>()
-        .ok()
-        .or_else(|| parse_chinese_number(body).map(|n| n as f64))?;
-
-    // Compute span by rolling a TimeDelta through add_seconds-equivalent.
-    let mut tmp = TimeDelta::default();
-    setter(&mut tmp, DeltaValue::Single(n * sign as f64));
-    let endpoint = apply_time_delta(now, &tmp)?;
-
-    let (start, end) = if sign > 0 {
-        (now, endpoint)
+    // Handle `半` as 0.5 and `仨`/`俩` as 3/2.
+    let body_norm = body.replace('仨', "三").replace('俩', "两");
+    let n: f64 = if body_norm == "半" {
+        0.5
     } else {
-        (endpoint, now)
+        body_norm
+            .parse::<f64>()
+            .ok()
+            .or_else(|| parse_chinese_number(&body_norm).map(|v| v as f64))?
     };
+    // Build the delta via setter (applies unit scaling like 7x for 周).
+    let mut delta = TimeDelta::default();
+    let sign = match kind {
+        Kind::Future | Kind::GuoOpen => 1.0,
+        Kind::PastBlur | Kind::PastAcc => -1.0,
+    };
+    setter(&mut delta, DeltaValue::Single(n * sign));
+    let is_day = delta.day.is_some();
+    let is_hour = delta.hour.is_some();
+    let is_minute = delta.minute.is_some();
+    let is_second = delta.second.is_some();
+    // Compute offset with Python _compute_based_on_time_delta semantics
+    // (year: 365d, month: 30.417d, day/hour/minute/second: exact).
+    let offset_sec: i64 = {
+        let read_single = |v: &Option<DeltaValue>| -> f64 {
+            match v {
+                Some(DeltaValue::Single(n)) => *n,
+                Some(DeltaValue::Range(_, _)) => 0.0,
+                None => 0.0,
+            }
+        };
+        let mut s = 0.0_f64;
+        s += read_single(&delta.year) * 365.0 * 86400.0;
+        s += read_single(&delta.month) * 30.417 * 86400.0;
+        s += read_single(&delta.day) * 86400.0;
+        s += read_single(&delta.hour) * 3600.0;
+        s += read_single(&delta.minute) * 60.0;
+        s += read_single(&delta.second);
+        s as i64
+    };
+    let endpoint = now + Duration::seconds(offset_sec);
+    // Precision-aware end (`未来` future):
+    //   - day/hour/minute/second in delta → accurate, preserve now's h:m:s (exact)
+    //   - year/month only → blur, truncate end to end-of-day-of-month-of-endpoint
+    let is_subday = is_day || is_hour || is_minute || is_second;
+    let definition = if is_subday { "accurate" } else { "blur" };
+    // Infer time_base precision from `now`: if all time fields are 0 and
+    // day==1 (January), year-precision; day==1 with non-January, month-
+    // precision. Otherwise full precision.
+    let now_tm = now.time();
+    let is_year_prec = now_tm.hour() == 0
+        && now_tm.minute() == 0
+        && now_tm.second() == 0
+        && now.month() == 1
+        && now.day() == 1;
+    let is_month_prec = !is_year_prec
+        && now_tm.hour() == 0
+        && now_tm.minute() == 0
+        && now_tm.second() == 0
+        && now.day() == 1;
+    // Fill endpoint to match time_base precision (end side):
+    let endpoint_end = |endpoint: NaiveDateTime| -> NaiveDateTime {
+        if is_year_prec {
+            NaiveDate::from_ymd_opt(endpoint.year(), 12, 31)
+                .and_then(|d| d.and_hms_opt(23, 59, 59))
+                .unwrap_or(endpoint)
+        } else if is_month_prec {
+            // Last day of endpoint's month.
+            let y = endpoint.year();
+            let m = endpoint.month();
+            let next = if m == 12 {
+                NaiveDate::from_ymd_opt(y + 1, 1, 1)
+            } else {
+                NaiveDate::from_ymd_opt(y, m + 1, 1)
+            };
+            next.and_then(|n| n.pred_opt())
+                .and_then(|d| d.and_hms_opt(23, 59, 59))
+                .unwrap_or(endpoint)
+        } else {
+            endpoint.date().and_hms_opt(23, 59, 59).unwrap_or(endpoint)
+        }
+    };
+    let endpoint_start = |endpoint: NaiveDateTime| -> NaiveDateTime {
+        if is_year_prec {
+            NaiveDate::from_ymd_opt(endpoint.year(), 1, 1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .unwrap_or(endpoint)
+        } else if is_month_prec {
+            NaiveDate::from_ymd_opt(endpoint.year(), endpoint.month(), 1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .unwrap_or(endpoint)
+        } else {
+            endpoint.date().and_hms_opt(0, 0, 0).unwrap_or(endpoint)
+        }
+    };
+    // Fill `now` to mirror Python's handler fill when seconds aren't given.
+    // Heuristic: if now.second() == 0 we assume time_base didn't specify
+    // seconds — end points get :59, start points stay :00.
+    let now_end = if now.second() == 0 {
+        now.with_second(59).unwrap_or(now)
+    } else {
+        now
+    };
+    // When `内` is present with sub-day units, Python sets sec=-1 → fills
+    // to :59 on the endpoint side.
+    let endpoint_inner = if has_inner && is_subday && endpoint.second() == 0 {
+        endpoint.with_second(59).unwrap_or(endpoint)
+    } else {
+        endpoint
+    };
+    let (start, end) = match kind {
+        Kind::Future => {
+            if is_subday {
+                (now, endpoint_inner)
+            } else {
+                (now, endpoint_end(endpoint))
+            }
+        }
+        Kind::PastBlur | Kind::PastAcc => {
+            if is_subday {
+                (endpoint, now_end)
+            } else {
+                (endpoint_start(endpoint), now_end)
+            }
+        }
+        Kind::GuoOpen => {
+            let sentinel_far = NaiveDate::from_ymd_opt(9999, 12, 31)?.and_hms_opt(23, 59, 59)?;
+            if is_subday {
+                (endpoint, sentinel_far)
+            } else {
+                (endpoint_start(endpoint), sentinel_far)
+            }
+        }
+    };
+    let _ = has_inner; // suffix was informational
     Some(TimeInfo {
         time_type: "time_span",
         start,
         end,
-        definition: "blur",
+        definition,
         ..Default::default()
     })
 }
@@ -5088,28 +6214,415 @@ fn try_delta_to_span(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
 /// Pattern #65, #66 — `N<unit>内` / `N<unit>来` → time_span ending at now,
 /// starting N<unit> earlier. Longest suffix first so 之内/以内 win over bare 内.
 fn try_delta_inner_span(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
-    let body = text
+    // Python parity:
+    //   `N<unit>内`/`N<unit>之内`/`N<unit>以内` → time_span [now, now+N]
+    //     day-level unit → end fills to 23:59:59 of that day.
+    //   `N<unit>来` → time_span [now - N, now].
+    let (is_inner, body) = if let Some(b) = text
         .strip_suffix("之内")
         .or_else(|| text.strip_suffix("以内"))
         .or_else(|| text.strip_suffix('内'))
-        .or_else(|| text.strip_suffix('来'));
-    let body = body?;
-    let (setter, rest) = strip_delta_unit(body)?;
+    {
+        (true, b)
+    } else if let Some(b) = text
+        .strip_suffix("以来")
+        .or_else(|| text.strip_suffix('来'))
+    {
+        (false, b)
+    } else {
+        return None;
+    };
+    // Strip `半` / `多` / `余` markers first (treat as blur modifiers).
+    // `<unit>半` → `<unit>` + plus_half=true (e.g. `3年半` = 3.5 years).
+    // Infix `半<unit>` / `半分钟` / `个半<unit>` similar.
+    // `多` / `余` postfix = blur, count unchanged (Python).
+    let (body_norm, plus_half) = {
+        let mut plus = false;
+        let mut working = body.to_string();
+        for suf in [
+            "天半",
+            "日半",
+            "月半",
+            "年半",
+            "小时半",
+            "分半钟",
+            "分半",
+            "秒半",
+        ] {
+            if let Some(stripped) = working.clone().strip_suffix(suf) {
+                let new = format!("{}{}", stripped, suf.chars().next().unwrap());
+                working = new;
+                plus = true;
+                break;
+            }
+        }
+        let replaced = working
+            .replace("个半月", "个月")
+            .replace("个半小时", "个小时")
+            .replace("个半钟头", "个钟头")
+            .replace("半分钟", "分钟")
+            .replace("分半钟", "分钟");
+        if replaced != working {
+            plus = true;
+        }
+        working = replaced;
+        // Post-unit `多`/`余` markers: `3年多`, `3个月多`.
+        for suf in [
+            "年多",
+            "年余",
+            "天多",
+            "天余",
+            "日多",
+            "日余",
+            "月多",
+            "月余",
+            "小时多",
+            "分钟多",
+            "秒多",
+        ] {
+            if let Some(stripped) = working.clone().strip_suffix(suf) {
+                let unit_char = match suf {
+                    "年多" | "年余" => "年",
+                    "天多" | "天余" => "天",
+                    "日多" | "日余" => "日",
+                    "月多" | "月余" => "月",
+                    "小时多" => "小时",
+                    "分钟多" => "分钟",
+                    "秒多" => "秒",
+                    _ => "",
+                };
+                working = format!("{}{}", stripped, unit_char);
+                break;
+            }
+        }
+        let working = working
+            .replace("个多月", "个月")
+            .replace("个余月", "个月")
+            .replace("多年", "年")
+            .replace("余年", "年")
+            .replace("多天", "天")
+            .replace("余天", "天")
+            .replace("多日", "日")
+            .replace("余日", "日");
+        (working, plus)
+    };
+    let (setter, rest) = strip_delta_unit(&body_norm)?;
     let rest = rest.trim_end_matches('个').trim();
-    let n: f64 = rest
-        .parse::<f64>()
-        .ok()
-        .or_else(|| parse_chinese_number(rest).map(|n| n as f64))?;
-    let mut tmp = TimeDelta::default();
-    setter(&mut tmp, DeltaValue::Single(-n));
-    let start = apply_time_delta(now, &tmp)?;
+    // Handle bare `半<unit>` → n = 0.5.
+    let base_n: f64 = if rest.is_empty() {
+        if plus_half {
+            0.0
+        } else {
+            return None;
+        }
+    } else if rest == "半" {
+        0.5
+    } else {
+        rest.parse::<f64>()
+            .ok()
+            .or_else(|| parse_chinese_number(rest).map(|n| n as f64))?
+    };
+    let n = base_n + if plus_half { 0.5 } else { 0.0 };
+    let is_fractional = (n - n.trunc()).abs() > 1e-9;
+    // Probe unit.
+    let mut probe = TimeDelta::default();
+    setter(&mut probe, DeltaValue::Single(1.0));
+    let is_year_unit = probe.year.is_some();
+    let is_month_unit = probe.month.is_some();
+    let is_day_unit = probe.day.is_some();
+    let is_hour_unit = probe.hour.is_some();
+    let is_minute_unit = probe.minute.is_some();
+    let is_second_unit = probe.second.is_some();
+    let is_workday_unit = probe.workday.is_some();
+    // Python: if time_year_delta > 2000, treat as concrete year (`2024年内`).
+    if is_year_unit && is_inner && n > 2000.0 {
+        let y = n as i32;
+        let first = NaiveDate::from_ymd_opt(y, 1, 1)?;
+        let last = NaiveDate::from_ymd_opt(y, 12, 31)?;
+        return Some(TimeInfo {
+            time_type: "time_span",
+            start: first.and_hms_opt(0, 0, 0)?,
+            end: last.and_hms_opt(23, 59, 59)?,
+            definition: "accurate",
+            ..Default::default()
+        });
+    }
+    // Compute cur_datetime = now ± n<unit>.
+    let sign = if is_inner { 1.0 } else { -1.0 };
+    let cur = if is_workday_unit {
+        // Skip weekends.
+        let mut d = now;
+        let mut count = 0i64;
+        let step = if sign > 0.0 { 1 } else { -1 };
+        let target = n as i64;
+        while count < target {
+            d += Duration::days(step);
+            if d.weekday().num_days_from_monday() < 5 {
+                count += 1;
+            }
+        }
+        d
+    } else {
+        let offset_sec: i64 = {
+            let mut s = 0.0_f64;
+            if is_year_unit {
+                s += n * 365.0 * 86400.0;
+            } else if is_month_unit {
+                s += n * 30.417 * 86400.0;
+            } else if is_day_unit {
+                s += n * 86400.0;
+            } else if is_hour_unit {
+                s += n * 3600.0;
+            } else if is_minute_unit {
+                s += n * 60.0;
+            } else if is_second_unit {
+                s += n;
+            }
+            (s * sign) as i64
+        };
+        now + Duration::seconds(offset_sec)
+    };
+    // Detect time_base precision (heuristic based on now's fields).
+    let prec_year_only = now.time() == chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
+        && now.month() == 1
+        && now.day() == 1;
+    let prec_month_only = !prec_year_only
+        && now.time() == chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
+        && now.day() == 1;
+    let prec_day_only = !prec_year_only
+        && !prec_month_only
+        && now.time() == chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+    let prec_hour_only = !prec_year_only
+        && !prec_month_only
+        && !prec_day_only
+        && now.minute() == 0
+        && now.second() == 0;
+    let prec_minute_only = !prec_year_only
+        && !prec_month_only
+        && !prec_day_only
+        && !prec_hour_only
+        && now.second() == 0;
+    // Compute handler (y, m, d, h, mi, s) for cur, filling with -1 where
+    // Python would.
+    let handler_to_dt = |y: Option<i32>,
+                         m: Option<u32>,
+                         d: Option<u32>,
+                         h: Option<u32>,
+                         mi: Option<u32>,
+                         s: Option<u32>,
+                         end: bool|
+     -> Option<NaiveDateTime> {
+        let (yy, mm, dd, hh, mimi, ss) = (
+            y.unwrap_or(1970),
+            m.unwrap_or(if end { 12 } else { 1 }),
+            d,
+            h,
+            mi,
+            s,
+        );
+        let day = match dd {
+            Some(v) => v,
+            None => {
+                if end {
+                    last_day_of_month(yy, mm)?
+                } else {
+                    1
+                }
+            }
+        };
+        let hh_v = match hh {
+            Some(v) => v,
+            None => {
+                if end {
+                    23
+                } else {
+                    0
+                }
+            }
+        };
+        let mimi_v = match mimi {
+            Some(v) => v,
+            None => {
+                if end {
+                    59
+                } else {
+                    0
+                }
+            }
+        };
+        let ss_v = match ss {
+            Some(v) => v,
+            None => {
+                if end {
+                    59
+                } else {
+                    0
+                }
+            }
+        };
+        NaiveDate::from_ymd_opt(yy, mm, day)?.and_hms_opt(hh_v, mimi_v, ss_v)
+    };
+    // Build handler for first and second based on unit and direction.
+    // Start with cur_handler (all fields filled) and apply Python's
+    // precision rules.
+    let (cy, cm, cd, ch, cmi, cs) = (
+        cur.year(),
+        cur.month(),
+        cur.day(),
+        cur.hour(),
+        cur.minute(),
+        cur.second(),
+    );
+    // Time_base partial handler derived from `now` and precision heuristic.
+    let tb_y = Some(now.year());
+    let tb_m = if prec_year_only {
+        None
+    } else {
+        Some(now.month())
+    };
+    let tb_d = if prec_year_only || prec_month_only {
+        None
+    } else {
+        Some(now.day())
+    };
+    let tb_h = if prec_year_only || prec_month_only || prec_day_only {
+        None
+    } else {
+        Some(now.hour())
+    };
+    let tb_mi = if prec_year_only || prec_month_only || prec_day_only || prec_hour_only {
+        None
+    } else {
+        Some(now.minute())
+    };
+    let tb_s =
+        if prec_year_only || prec_month_only || prec_day_only || prec_hour_only || prec_minute_only
+        {
+            None
+        } else {
+            Some(now.second())
+        };
+    // Decide first and second handlers.
+    let (first_h, second_h): (
+        (
+            Option<i32>,
+            Option<u32>,
+            Option<u32>,
+            Option<u32>,
+            Option<u32>,
+            Option<u32>,
+        ),
+        (
+            Option<i32>,
+            Option<u32>,
+            Option<u32>,
+            Option<u32>,
+            Option<u32>,
+            Option<u32>,
+        ),
+    );
+    if is_year_unit {
+        // non-integer → month precision; integer → year precision.
+        let cur_h = if is_fractional {
+            (Some(cy), Some(cm), None, None, None, None)
+        } else {
+            (Some(cy), None, None, None, None, None)
+        };
+        if is_inner {
+            // first=time_base, second=cur (year-only or month-only)
+            first_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+            second_h = cur_h;
+        } else {
+            // 来: first=cur, second=time_base
+            first_h = cur_h;
+            second_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+        }
+    } else if is_month_unit {
+        // Python month_delta_point: integer → month precision (day=-1);
+        // non-integer → day precision (day=cur.d).
+        let cur_h = if is_fractional {
+            (Some(cy), Some(cm), Some(cd), None, None, None)
+        } else {
+            (Some(cy), Some(cm), None, None, None, None)
+        };
+        if is_inner {
+            first_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+            second_h = cur_h;
+        } else {
+            first_h = cur_h;
+            second_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+        }
+    } else if is_day_unit || is_workday_unit {
+        // integer → day precision; non-integer → hour precision.
+        let cur_h = if is_fractional {
+            (Some(cy), Some(cm), Some(cd), Some(ch), None, None)
+        } else {
+            (Some(cy), Some(cm), Some(cd), None, None, None)
+        };
+        if is_inner {
+            first_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+            second_h = cur_h;
+        } else {
+            first_h = cur_h;
+            second_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+        }
+    } else if is_hour_unit {
+        // minute precision (hour accurate, minute kept, sec=-1).
+        let cur_h = (Some(cy), Some(cm), Some(cd), Some(ch), Some(cmi), None);
+        if is_inner {
+            first_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+            second_h = cur_h;
+        } else {
+            first_h = cur_h;
+            second_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+        }
+    } else if is_minute_unit {
+        // Python minute_delta_point `内` branch preserves sec exact.
+        let cur_h = (Some(cy), Some(cm), Some(cd), Some(ch), Some(cmi), Some(cs));
+        if is_inner {
+            first_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+            second_h = cur_h;
+        } else {
+            first_h = cur_h;
+            second_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+        }
+    } else {
+        // second unit.
+        let cur_h = (Some(cy), Some(cm), Some(cd), Some(ch), Some(cmi), Some(cs));
+        if is_inner {
+            first_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+            second_h = cur_h;
+        } else {
+            first_h = cur_h;
+            second_h = (tb_y, tb_m, tb_d, tb_h, tb_mi, tb_s);
+        }
+    }
+    let start = handler_to_dt(
+        first_h.0, first_h.1, first_h.2, first_h.3, first_h.4, first_h.5, false,
+    )?;
+    let end = handler_to_dt(
+        second_h.0, second_h.1, second_h.2, second_h.3, second_h.4, second_h.5, true,
+    )?;
+    // Definition: accurate if the delta has hour/minute/second/day, else blur.
+    let is_subday =
+        is_day_unit || is_workday_unit || is_hour_unit || is_minute_unit || is_second_unit;
+    let definition = if is_subday { "accurate" } else { "blur" };
     Some(TimeInfo {
         time_type: "time_span",
         start,
-        end: now,
-        definition: "blur",
+        end,
+        definition,
         ..Default::default()
     })
+}
+
+fn last_day_of_month(y: i32, m: u32) -> Option<u32> {
+    let next = if m == 12 {
+        NaiveDate::from_ymd_opt(y + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(y, m + 1, 1)
+    }?;
+    Some(next.pred_opt()?.day())
 }
 
 /// Pattern #64, #67 — sub-day-precision `...之后` / `...之前` / `...以后` /
@@ -5251,7 +6764,7 @@ fn apply_time_delta(now: NaiveDateTime, d: &TimeDelta) -> Option<NaiveDateTime> 
 /// plus per-year corrections, per Python reference implementation.
 type SolarTermEntry = (&'static str, u32, f64, f64, &'static [(i32, i32)]);
 const SOLAR_TERMS: &[SolarTermEntry] = &[
-    ("小寒", 1, 6.11, 5.4055, &[(2019, -1), (1982, 1)]),
+    ("小寒", 1, 6.11, 5.4055, &[(2019, -1), (1982, 1), (2021, 1)]),
     ("大寒", 1, 20.84, 20.12, &[(2082, 1)]),
     ("立春", 2, 4.6295, 3.87, &[]),
     ("雨水", 2, 19.4599, 18.73, &[(2026, -1)]),
@@ -5274,7 +6787,13 @@ const SOLAR_TERMS: &[SolarTermEntry] = &[
     ("立冬", 11, 8.218, 7.438, &[(2089, 1)]),
     ("小雪", 11, 23.08, 22.36, &[(1978, 0)]),
     ("大雪", 12, 7.9, 7.18, &[(1954, 1)]),
-    ("冬至", 12, 22.6, 21.94, &[(2021, -1), (1918, -1)]),
+    (
+        "冬至",
+        12,
+        22.6,
+        21.94,
+        &[(2021, -1), (1918, -1), (2024, -1)],
+    ),
 ];
 
 fn solar_term_date(term: &str, year: i32) -> Option<(u32, u32)> {
@@ -5408,6 +6927,32 @@ fn try_season(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
             (now.year(), text.to_string())
         }
     };
+    // Python uses solar-term boundaries: 春=立春..立夏-1, 夏=立夏..立秋-1,
+    // 秋=立秋..立冬-1, 冬=立冬..(next year 立春)-1.
+    let season_key = match rest.as_str() {
+        "春" | "春天" | "春季" => Some(("立春", "立夏", 0)),
+        "夏" | "夏天" | "夏季" => Some(("立夏", "立秋", 0)),
+        "秋" | "秋天" | "秋季" => Some(("立秋", "立冬", 0)),
+        "冬" | "冬天" | "冬季" => Some(("立冬", "立春", 1)),
+        _ => None,
+    };
+    if let Some((lo_term, hi_term, end_year_delta)) = season_key {
+        let (lo_m, lo_d) = solar_term_date(lo_term, year)?;
+        // Python computes the end term using the START year's solar table
+        // (same year, even for 冬 which spans into next calendar year), then
+        // shifts the resolved date's year by +1 for 冬. Match that quirk so
+        // our 冬季 end lands on Feb(year+1)-立春(year)-1 rather than 立春(year+1)-1.
+        let (hi_m, hi_d) = solar_term_date(hi_term, year)?;
+        let lo_date = NaiveDate::from_ymd_opt(year, lo_m, lo_d)?;
+        let hi_date = NaiveDate::from_ymd_opt(year + end_year_delta, hi_m, hi_d)?.pred_opt()?;
+        return Some(TimeInfo {
+            time_type: "time_span",
+            start: lo_date.and_hms_opt(0, 0, 0)?,
+            end: hi_date.and_hms_opt(23, 59, 59)?,
+            definition: "accurate",
+            ..Default::default()
+        });
+    }
     let (m_start, m_end) = season_months(&rest)?;
     let first = NaiveDate::from_ymd_opt(year, m_start, 1)?;
     // 冬 wraps to next year's Feb 28/29 for "冬天".
@@ -5507,17 +7052,29 @@ fn parse_lunar_month(s: &str) -> Option<(u32, bool, &str)> {
 /// Lunar day name → day number (1-30). Handles: 初一..初十 / 十一..十九 /
 /// 二十 / 二十一..二十九 / 三十 / plain Chinese numeral day.
 fn parse_lunar_day(s: &str) -> Option<(u32, &str)> {
-    // Try ASCII digit first.
+    parse_lunar_day_impl(s, false)
+}
+fn parse_lunar_day_impl(s: &str, allow_arabic: bool) -> Option<(u32, &str)> {
+    // Try ASCII digit only when caller opts in AND digits are followed
+    // by a day marker (日/号). Python accepts `农历8月23号` but not
+    // `腊月18`, so we require the marker when the day is Arabic.
     let bytes = s.as_bytes();
-    let mut end = 0usize;
-    while end < bytes.len() && bytes[end].is_ascii_digit() {
-        end += 1;
-    }
-    if end > 0 {
+    if allow_arabic && !bytes.is_empty() && bytes[0].is_ascii_digit() {
+        let mut end = 0usize;
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
         let d: u32 = s[..end].parse().ok()?;
         if (1..=30).contains(&d) {
-            return Some((d, &s[end..]));
+            let rest = &s[end..];
+            if rest.starts_with('日') || rest.starts_with('号') {
+                return Some((d, rest));
+            }
         }
+        return None;
+    }
+    if !bytes.is_empty() && bytes[0].is_ascii_digit() {
+        return None;
     }
     // 初一 .. 初十. Also accept `初` + Arabic digit (e.g. `初8`).
     if let Some(rest) = s.strip_prefix('初') {
@@ -5671,15 +7228,14 @@ fn try_lunar_date(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         }
     };
 
-    // Special case: bare `廿N` or `初N` with no month — inherits lunar
-    // month from now. Python treats these as day-only lunar forms.
+    // Special case: bare `廿N` or `初N` with no month — Python convention
+    // fills year/month from the Gregorian time_base handler and treats
+    // those as lunar year/month.
     if body.starts_with('廿') || body.starts_with('卅') || body.starts_with('念') {
         if let Some((day, tail)) = parse_lunar_day(&body) {
             if tail.trim().is_empty() {
-                // Current lunar month.
-                use crate::gadget::lunar_solar::solar_to_lunar;
-                let (ly, lm, _ld, _is_leap) = solar_to_lunar(now.date())?;
-                if let Some(date) = lunar_to_solar(ly, lm, day, false) {
+                // Use now's Gregorian year/month as the lunar year/month.
+                if let Some(date) = lunar_to_solar(now.year(), now.month(), day, false) {
                     return Some(TimeInfo {
                         time_type: "time_point",
                         start: date.and_hms_opt(0, 0, 0)?,
@@ -5704,18 +7260,17 @@ fn try_lunar_date(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     // Step 2: parse lunar month + optional day.
     let (lunar_month, is_leap, after_m) = parse_lunar_month(&body)?;
     let after_m = after_m.trim();
-    if after_m.is_empty() {
-        // Whole lunar month only when the caller clearly meant lunar:
-        //   - explicit `农历` / `阴历` marker in the original text, OR
-        //   - `闰` leap-month marker, OR
-        //   - lunar-only month names (正月 / 腊月 / 冬月 / 梅月).
-        let explicit_lunar = text.contains("农历")
-            || text.contains("阴历")
-            || is_leap
-            || body.starts_with("正月")
-            || body.starts_with("腊月")
-            || body.starts_with("冬月")
-            || body.starts_with("梅月");
+    let explicit_lunar = text.contains("农历")
+        || text.contains("阴历")
+        || is_leap
+        || body.starts_with("正月")
+        || body.starts_with("腊月")
+        || body.starts_with("冬月")
+        || body.starts_with("梅月");
+    // When explicit lunar + Arabic day without marker (腊月18), Python
+    // returns whole month. Detect and route to the month-only branch.
+    let after_m_all_digits = !after_m.is_empty() && after_m.chars().all(|c| c.is_ascii_digit());
+    if after_m.is_empty() || (explicit_lunar && after_m_all_digits) {
         if !explicit_lunar {
             return None;
         }
@@ -5732,10 +7287,7 @@ fn try_lunar_date(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
                     }
                 }
             }
-            match found {
-                Some(y) => y,
-                None => return None,
-            }
+            found?
         } else {
             year
         };
@@ -5762,8 +7314,16 @@ fn try_lunar_date(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
             ..Default::default()
         });
     }
-    let (lunar_day, tail) = parse_lunar_day(after_m)?;
-    let tail = tail.trim();
+    let (lunar_day, tail) = parse_lunar_day_impl(after_m, explicit_lunar)?;
+    // Strip a trailing 日/号 marker only when explicit lunar is present
+    // (otherwise Gregorian forms like `8月12日` would be mis-routed here).
+    let tail = if explicit_lunar {
+        tail.trim_start_matches('日')
+            .trim_start_matches('号')
+            .trim()
+    } else {
+        tail.trim()
+    };
 
     let date = lunar_to_solar(year, lunar_month, lunar_day, is_leap)?;
     let start = date.and_hms_opt(0, 0, 0)?;
