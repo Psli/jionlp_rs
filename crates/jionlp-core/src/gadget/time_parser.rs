@@ -4408,7 +4408,7 @@ fn try_approx_clock(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
 fn try_super_blur_hms(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     static RE: Lazy<Regex> = Lazy::new(|| {
         Regex::new(
-            r"^(前|近|过去|未来|这)\s*(\d+|[一二两三四五六七八九十]+)\s*(?:个\s*)?(小时|分钟|秒)$",
+            r"^(前|近|过去|未来|这)\s*(\d+|[一二两三四五六七八九十]+)\s*(?:个\s*)?(小时|钟头|分钟|秒)$",
         )
         .unwrap()
     });
@@ -4421,7 +4421,7 @@ fn try_super_blur_hms(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         .or_else(|| cn_int(n_str).map(|v| v as i64))?;
     let unit = caps.get(3)?.as_str();
     let seconds: i64 = match unit {
-        "小时" => n * 3600,
+        "小时" | "钟头" => n * 3600,
         "分钟" => n * 60,
         "秒" => n,
         _ => return None,
