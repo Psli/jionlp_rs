@@ -249,6 +249,10 @@ pub fn parse_time_with_ref(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
     if let Some(t) = try_nth_weekday_of_month_loose(trimmed, now) {
         return Some(t);
     }
+    // Python parity — `<year>第N个(周|礼拜|星期)` — Nth full week of year.
+    if let Some(t) = try_year_nth_week_loose(trimmed, now) {
+        return Some(t);
+    }
     // Python parity — `<year>?上半年/下半年` / `<year>?伊始`.
     if let Some(t) = try_half_year(trimmed, now) {
         return Some(t);
@@ -2789,6 +2793,37 @@ fn try_relative_year_month_day(text: &str, now: NaiveDateTime) -> Option<TimeInf
         .trim();
     let (start, end) = date_range(year, Some(month), Some(day))?;
     apply_optional_clock(start, end, tail)
+}
+
+/// `<year>第N个(周|礼拜|星期)`. Week 1 starts on the first Monday of
+/// the year. Covers `21年第一个礼拜`.
+fn try_year_nth_week_loose(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
+    let (year, rest) = resolve_optional_year_prefix(text, now)?;
+    if year == now.year() && rest == text {
+        return None; // No prefix — don't match bare forms here.
+    }
+    let rest = rest.trim_start_matches('的').trim();
+    static RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"^第\s*(\d+|[一二三四五六七八九十]+)\s*个?\s*(周|礼拜|星期)$").unwrap()
+    });
+    let caps = RE.captures(rest)?;
+    let n_str = caps.get(1)?.as_str();
+    let n: u32 = n_str.parse::<u32>().ok().or_else(|| cn_int(n_str))?;
+    if !(1..=53).contains(&n) {
+        return None;
+    }
+    let first = NaiveDate::from_ymd_opt(year, 1, 1)?;
+    let wday = first.weekday().num_days_from_monday();
+    let first_monday = first + chrono::Duration::days(((7 - wday) % 7) as i64);
+    let week_start = first_monday + chrono::Duration::days(((n - 1) * 7) as i64);
+    let week_end = week_start + chrono::Duration::days(6);
+    Some(TimeInfo {
+        time_type: "time_span",
+        start: week_start.and_hms_opt(0, 0, 0)?,
+        end: week_end.and_hms_opt(23, 59, 59)?,
+        definition: "accurate",
+        ..Default::default()
+    })
 }
 
 /// `<year>?<M月(份)?>(的)?第N个(周|星期|礼拜)<weekday>`.
@@ -5541,13 +5576,15 @@ fn try_lunar_date(text: &str, now: NaiveDateTime) -> Option<TimeInfo> {
         });
     }
     let (lunar_day, tail) = parse_lunar_day(after_m)?;
-    if !tail.trim().is_empty() {
-        return None;
-    }
+    let tail = tail.trim();
 
     let date = lunar_to_solar(year, lunar_month, lunar_day, is_leap)?;
     let start = date.and_hms_opt(0, 0, 0)?;
     let end = date.and_hms_opt(23, 59, 59)?;
+    // Accept a trailing clock / period-of-day (`农历8月十五晚8点`).
+    if !tail.is_empty() {
+        return apply_optional_clock(start, end, tail);
+    }
     Some(TimeInfo {
         time_type: "time_point",
         start,
